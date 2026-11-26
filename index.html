@@ -81,7 +81,7 @@ img.qi{max-width:100%;max-height:340px;border-radius:8px;margin:8px 0}
 var ESQUEMA = {
   Cursos: ['id', 'nombre', 'descripcion', 'creado'],
   Estudiantes: ['codigo', 'nombre', 'curso', 'correo', 'salt', 'hash', 'fallos', 'bloqueo'],
-  Examenes: ['id', 'cursoId', 'titulo', 'descripcion', 'duracion', 'inicio', 'fin', 'estado', 'aleatorio', 'mostrarNota', 'intentos', 'cortarEnFin', 'preguntas', 'actualizado'],
+  Examenes: ['id', 'cursoId', 'titulo', 'descripcion', 'duracion', 'inicio', 'fin', 'estado', 'aleatorio', 'mostrarNota', 'intentos', 'cortarEnFin', 'preguntas', 'actualizado', 'sinRetroceso'],
   Banco: ['id', 'cursoId', 'tipo', 'etiqueta', 'pregunta', 'actualizado'],
   Intentos: ['id', 'examenId', 'codigo', 'nombre', 'curso', 'inicio', 'deadline', 'fin', 'estado', 'respuestas', 'puntajes', 'puntaje', 'total', 'nota', 'salidas', 'pendientes', 'semilla']
 };
@@ -150,7 +150,7 @@ function cuFila(r) { return { id: S(r.id), nombre: S(r.nombre), descripcion: S(r
 function estFila(r) { return { codigo: S(r.codigo), nombre: S(r.nombre), curso: S(r.curso), correo: S(r.correo), salt: S(r.salt), hash: S(r.hash), fallos: N(r.fallos), bloqueo: N(r.bloqueo) }; }
 function estPub(e) { return { codigo: e.codigo, nombre: e.nombre, curso: e.curso, correo: e.correo, tienePass: !!e.hash }; }
 function exFila(r) {
-  return { id: S(r.id), cursoId: S(r.cursoId), titulo: S(r.titulo), descripcion: S(r.descripcion), duracion: N(r.duracion), inicio: N(r.inicio), fin: N(r.fin), estado: S(r.estado) || 'borrador', aleatorio: B(r.aleatorio), mostrarNota: B(r.mostrarNota), intentos: N(r.intentos, 1) || 1, cortarEnFin: B(r.cortarEnFin), preguntas: J(r.preguntas, []), actualizado: N(r.actualizado) };
+  return { id: S(r.id), cursoId: S(r.cursoId), titulo: S(r.titulo), descripcion: S(r.descripcion), duracion: N(r.duracion), inicio: N(r.inicio), fin: N(r.fin), estado: S(r.estado) || 'borrador', aleatorio: B(r.aleatorio), mostrarNota: B(r.mostrarNota), intentos: N(r.intentos, 1) || 1, cortarEnFin: B(r.cortarEnFin), sinRetroceso: B(r.sinRetroceso), preguntas: J(r.preguntas, []), actualizado: N(r.actualizado) };
 }
 function exAFila(e) { var o = {}; for (var k in e) o[k] = e[k]; o.preguntas = JSON.stringify(e.preguntas || []); return o; }
 function bcFila(r) { return { id: S(r.id), cursoId: S(r.cursoId), tipo: S(r.tipo), etiqueta: S(r.etiqueta), pregunta: J(r.pregunta, {}), actualizado: N(r.actualizado) }; }
@@ -189,7 +189,7 @@ function calificar(ex, resp, semilla, prev) {
 }
 function paraEstudiante(ex, it) {
   return {
-    id: ex.id, titulo: ex.titulo, descripcion: ex.descripcion, duracion: ex.duracion, aleatorio: ex.aleatorio,
+    id: ex.id, titulo: ex.titulo, descripcion: ex.descripcion, duracion: ex.duracion, aleatorio: ex.aleatorio, sinRetroceso: ex.sinRetroceso,
     preguntas: ex.preguntas.map(function (q) {
       var o = { id: q.id, tipo: q.tipo, enunciado: q.enunciado, puntos: N(q.puntos, 1), imagen: q.imagen || '' };
       if (q.tipo === 'mc') o.opciones = q.opciones;
@@ -563,7 +563,8 @@ function vExam() {
   var ex = ST.ex, ord = ex.orden, qi = ex.cur, q = ex.examen.preguntas[ord[qi]], L = 'ABCDEFGH', h = '';
   h += '<div class="ex-top"><h2>' + esc(ex.examen.titulo) + '</h2><span class="timer" id="timer">--:--</span><button class="pr" data-act="pedirEnvio">Enviar examen</button></div>';
   h += '<main class="noselect"><div id="aviso">' + (ex.aviso ? '<div class="warn">' + esc(ex.aviso) + '</div>' : '') + '</div>';
-  h += '<div class="nav">' + ord.map(function (k, i) { var p = ex.examen.preguntas[k]; return '<button data-act="irQ" data-i="' + i + '" class="' + (respondida(p) ? 'ans ' : '') + (i === qi ? 'cur' : '') + '">' + (i + 1) + '</button>'; }).join('') + '</div>';
+  var sr = !!ex.examen.sinRetroceso;
+  h += '<div class="nav">' + ord.map(function (k, i) { var p = ex.examen.preguntas[k]; return '<button ' + (sr ? 'disabled style="cursor:default" ' : 'data-act="irQ" data-i="' + i + '" ') + 'class="' + (respondida(p) ? 'ans ' : '') + (i === qi ? 'cur' : '') + '">' + (i + 1) + '</button>'; }).join('') + '</div>' + (sr ? '<div class="mu" style="margin-bottom:8px">Este examen no permite volver a preguntas anteriores.</div>' : '');
   h += '<div class="card"><div class="row sp"><b>Pregunta ' + (qi + 1) + ' de ' + ord.length + '</b><span class="mu">' + q.puntos + ' pto' + (q.puntos === 1 ? '' : 's') + '</span></div><div style="font-size:17px;margin:10px 0">' + rich(q.enunciado) + '</div>' + (q.imagen ? '<img class="qi" src="' + esc(q.imagen) + '" alt="">' : '');
   var a = ex.resp[q.id];
   if (q.tipo === 'mc') ordenOpciones(q).forEach(function (oi, pos) { h += '<button class="ch ' + (a !== undefined && Number(a) === oi ? 'sel' : '') + '" data-act="resp" data-v="' + oi + '"><b>' + L[pos] + '</b><span>' + rich(q.opciones[oi]) + '</span></button>'; });
@@ -575,7 +576,7 @@ function vExam() {
     h += '<p class="mu">Elige para cada elemento su pareja.</p>';
     q.izq.forEach(function (it, i) { h += '<div class="row" style="margin:8px 0"><div style="flex:1;min-width:140px">' + rich(it) + '</div><select data-inp="emp" data-i="' + i + '" style="flex:1;min-width:140px"><option value="">— elegir —</option>' + q.der.map(function (d, k) { return '<option value="' + k + '"' + (String(arr[i]) === String(k) && arr[i] !== '' && arr[i] != null ? ' selected' : '') + '>' + esc(plain(d) || d) + '</option>'; }).join('') + '</select></div>'; });
   }
-  h += '<div class="row sp" style="margin-top:14px"><button data-act="irQ" data-i="' + (qi - 1) + '"' + (qi === 0 ? ' disabled' : '') + '>← Anterior</button>' + (qi === ord.length - 1 ? '<button class="pr" data-act="pedirEnvio">Finalizar y enviar</button>' : '<button data-act="irQ" data-i="' + (qi + 1) + '">Siguiente →</button>') + '</div></div></main>';
+  h += '<div class="row sp" style="margin-top:14px">' + (sr ? '<span></span>' : '<button data-act="irQ" data-i="' + (qi - 1) + '"' + (qi === 0 ? ' disabled' : '') + '>← Anterior</button>') + (qi === ord.length - 1 ? '<button class="pr" data-act="pedirEnvio">Finalizar y enviar</button>' : '<button data-act="irQ" data-i="' + (qi + 1) + '">Siguiente →</button>') + '</div></div></main>';
   return h;
 }
 function vFin() {
@@ -585,7 +586,7 @@ function vFin() {
   return h + '<button class="pr" data-act="verLista2">Volver a mis exámenes</button></div></main>';
 }
 async function cargarLista() { var r = await llamar('lista'); if (r.ok) { ST.est = r.estudiante; ST.token = r.token; ST.lista = r.examenes; } return r; }
-function guardaLocal() { var ex = ST.ex; try { localStorage.setItem('pe_r_' + ex.intento.id, JSON.stringify({ r: ex.resp, s: ex.salidas })); } catch (e) { } ex.sucio = true; }
+function guardaLocal() { var ex = ST.ex; try { localStorage.setItem('pe_r_' + ex.intento.id, JSON.stringify({ r: ex.resp, s: ex.salidas, c: ex.cur })); } catch (e) { } ex.sucio = true; }
 function actualizaTimer() {
   var ex = ST.ex; if (!ex || ST.vista !== 'exam') return; var t = $('timer'); if (!t) return;
   var rest = Math.max(0, Math.round((ex.intento.deadline - ahora()) / 1000)), m = Math.floor(rest / 60), s = rest % 60;
@@ -685,7 +686,7 @@ function vEditor() {
   var h = '<div class="row sp"><div><h2 style="margin:0">' + (E.id ? 'Editar sesión de examen' : 'Nueva sesión de examen') + '</h2><div class="mu">Curso: <b>' + esc(nomCurso(E.cursoId)) + '</b></div></div><div class="row"><button data-act="cancelEd">Cancelar</button><button class="pr" data-act="guardaEd">Guardar</button></div></div>';
   h += '<div class="card"><label class="f">Título</label><input type="text" data-m="f:titulo" value="' + esc(E.titulo) + '"><div class="grid2"><div><label class="f">Duración (minutos, 0 = sin límite)</label><input type="number" min="0" data-m="f:duracion" value="' + E.duracion + '"></div><div><label class="f">Intentos permitidos</label><input type="number" min="1" data-m="f:intentos" value="' + E.intentos + '"></div><div><label class="f">Apertura</label><input type="datetime-local" data-m="f:inicio" value="' + aLocalInput(E.inicio) + '"></div><div><label class="f">Cierre</label><input type="datetime-local" data-m="f:fin" value="' + aLocalInput(E.fin) + '"></div></div>'
     + '<label class="f">Descripción / instrucciones</label><textarea data-m="f:descripcion">' + esc(E.descripcion) + '</textarea>'
-    + '<div class="row" style="margin-top:8px"><label><input type="checkbox" data-m="f:aleatorio"' + (E.aleatorio ? ' checked' : '') + '> Orden aleatorio de preguntas y opciones</label><label><input type="checkbox" data-m="f:mostrarNota"' + (E.mostrarNota ? ' checked' : '') + '> Mostrar la nota al estudiante al terminar</label><label><input type="checkbox" data-m="f:cortarEnFin"' + (E.cortarEnFin ? ' checked' : '') + '> Cortar el tiempo a la hora de cierre</label><label><input type="checkbox" data-m="f:publicado"' + (E.estado === 'publicado' ? ' checked' : '') + '> <b>Publicado</b> (visible para estudiantes)</label></div></div>';
+    + '<div class="row" style="margin-top:8px"><label><input type="checkbox" data-m="f:aleatorio"' + (E.aleatorio ? ' checked' : '') + '> Orden aleatorio de preguntas y opciones</label><label><input type="checkbox" data-m="f:mostrarNota"' + (E.mostrarNota ? ' checked' : '') + '> Mostrar la nota al estudiante al terminar</label><label><input type="checkbox" data-m="f:cortarEnFin"' + (E.cortarEnFin ? ' checked' : '') + '> Cortar el tiempo a la hora de cierre</label><label><input type="checkbox" data-m="f:sinRetroceso"' + (E.sinRetroceso ? ' checked' : '') + '> No permitir volver a preguntas anteriores</label><label><input type="checkbox" data-m="f:publicado"' + (E.estado === 'publicado' ? ' checked' : '') + '> <b>Publicado</b> (visible para estudiantes)</label></div></div>';
   var pts = E.preguntas.reduce(function (s, q) { return s + (Number(q.puntos) || 0); }, 0);
   h += '<div class="row sp"><h3 style="margin:6px 0">Preguntas (' + E.preguntas.length + ' · ' + pts + ' pts)</h3><span class="mu">Fórmulas con LaTeX: $x^2$ en línea, $$\\int_0^1 x\\,dx$$ en bloque</span></div>';
   E.preguntas.forEach(function (q, i) { h += vQ(q, i, false); });
@@ -825,11 +826,12 @@ var ACT = {
     var resp = Object.assign({}, r.intento.respuestas || {}, loc ? loc.r : {});
     ST.ex = { examen: r.examen, intento: r.intento, resp: resp, cur: 0, salidas: Math.max(r.intento.salidas || 0, loc ? loc.s || 0 : 0), aviso: '', sucio: false };
     ST.ex.orden = ordenPreguntas(); ST.vista = 'exam';
+    if (ST.ex.examen.sinRetroceso) { var u = ST.ex.orden.findIndex(function (k) { return !respondida(ST.ex.examen.preguntas[k]); }); if (u < 0) u = ST.ex.orden.length - 1; ST.ex.cur = Math.min(ST.ex.orden.length - 1, Math.max(loc && loc.c ? loc.c : 0, u)); }
     try { await document.documentElement.requestFullscreen(); } catch (e) { }
     render(); ST.ex.t1 = setInterval(actualizaTimer, 500);
     ST.ex.t2 = setInterval(async function () { var ex = ST.ex; if (!ex || !ex.sucio || ex.enviando) return; ex.sucio = false; var g = await api('guardar', { intentoId: ex.intento.id, respuestas: ex.resp, salidas: ex.salidas }); if (!g.ok) ex.sucio = true; }, 20000);
   },
-  irQ(t) { var i = Number(t.dataset.i); if (i < 0 || i >= ST.ex.orden.length) return; ST.ex.cur = i; render(); window.scrollTo(0, 0); },
+  irQ(t) { var i = Number(t.dataset.i); if (i < 0 || i >= ST.ex.orden.length) return; if (ST.ex.examen.sinRetroceso && i <= ST.ex.cur) return; ST.ex.cur = i; if (ST.ex.examen.sinRetroceso) guardaLocal(); render(); window.scrollTo(0, 0); },
   resp(t) { var q = ST.ex.examen.preguntas[ST.ex.orden[ST.ex.cur]], v = t.dataset.v; ST.ex.resp[q.id] = q.tipo === 'vf' ? v === 'true' : Number(v); guardaLocal(); render(); },
   pedirEnvio() { var ex = ST.ex, sin = ex.examen.preguntas.filter(function (q) { return !respondida(q); }).length; ST.modal = '<h3>¿Enviar el examen?</h3><p>' + (sin ? 'Te faltan <b>' + sin + '</b> pregunta(s) por responder.' : 'Respondiste todas las preguntas.') + ' Después de enviar no podrás cambiar nada.</p><div class="row"><button class="pr" data-act="confirmaEnvio">Sí, enviar</button><button data-act="cerrarModal">Seguir respondiendo</button></div>'; render(); },
   confirmaEnvio() { ST.modal = ''; render(); enviar(false); },
