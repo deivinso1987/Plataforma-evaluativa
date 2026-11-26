@@ -59,7 +59,7 @@ tr.cl:hover{background:#fdf6e8;cursor:pointer}
 .ch.sel{border-color:var(--p);background:var(--pl)}
 .ch b{min-width:24px;height:24px;border-radius:50%;background:#e2e8f0;display:inline-flex;align-items:center;justify-content:center;font-size:13px}
 .ch.sel b{background:var(--p);color:#fff}
-.noselect{user-select:none;-webkit-user-select:none}.noselect input,.noselect textarea,.noselect select{user-select:text;-webkit-user-select:text}
+body.cap #app{visibility:hidden}body.cap::before{content:'Contenido oculto: vuelve a esta ventana para continuar el examen';position:fixed;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;font:600 18px system-ui;color:#7a2a18;background:#faf6ef;z-index:9999}@media print{body.cap #app{visibility:hidden}#app{display:none}}.noselect{user-select:none;-webkit-user-select:none}.noselect input,.noselect textarea,.noselect select{user-select:text;-webkit-user-select:text}
 .ov{position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:flex-start;justify-content:center;padding:30px 12px;overflow:auto;z-index:50}
 .md{background:#fff;border-radius:14px;padding:18px;max-width:760px;width:100%}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:99;display:flex;flex-direction:column;gap:6px;align-items:center}
@@ -918,6 +918,25 @@ window.addEventListener('blur', function () { if (ST.vista === 'exam') setTimeou
 document.addEventListener('fullscreenchange', function () { if (ST.vista === 'exam' && !document.fullscreenElement && ST.ex && !ST.ex.enviando) { registraSalida('salió de pantalla completa'); if (!ST.modal) { ST.modal = '<h3>Volver a pantalla completa</h3><p>Saliste de la pantalla completa. Esto queda registrado.</p><button class="pr" data-act="volverFS">Continuar el examen</button>'; render(); } } });
 ACT.volverFS = async function () { ST.modal = ''; render(); try { await document.documentElement.requestFullscreen(); } catch (e) { } };
 ['copy', 'cut', 'paste', 'contextmenu'].forEach(function (ev) { document.addEventListener(ev, function (e) { if (ST.vista === 'exam' && !/INPUT|TEXTAREA/.test(e.target.tagName)) e.preventDefault(); }); });
+/* anti-captura: disuasivo (no existe bloqueo real en un navegador) */
+(function () {
+  function ocultar(ms) { document.body.classList.add('cap'); setTimeout(function () { if (document.hasFocus()) document.body.classList.remove('cap'); }, ms); }
+  function intento(m) { ocultar(2500); registraSalida(m); try { navigator.clipboard.writeText('Captura no permitida durante el examen'); } catch (e) { } }
+  document.addEventListener('keyup', function (e) { if (ST.vista === 'exam' && (e.key === 'PrintScreen' || e.code === 'PrintScreen')) intento('intento de captura de pantalla'); });
+  document.addEventListener('keydown', function (e) {
+    if (ST.vista !== 'exam') return;
+    var k = (e.key || '').toLowerCase();
+    var win = e.metaKey && e.shiftKey && k === 's';
+    var mac = e.metaKey && e.shiftKey && /^Digit[345]$/.test(e.code || '');
+    var imp = (e.ctrlKey || e.metaKey) && (k === 'p' || k === 's');
+    if (win || mac || imp) { e.preventDefault(); intento('intento de captura o impresión'); }
+  });
+  window.addEventListener('blur', function () { if (ST.vista === 'exam') document.body.classList.add('cap'); });
+  window.addEventListener('focus', function () { document.body.classList.remove('cap'); });
+  document.addEventListener('visibilitychange', function () { if (ST.vista === 'exam') { if (document.hidden) document.body.classList.add('cap'); else if (document.hasFocus()) document.body.classList.remove('cap'); } });
+  window.addEventListener('beforeprint', function () { if (ST.vista === 'exam') document.body.classList.add('cap'); });
+  window.addEventListener('afterprint', function () { document.body.classList.remove('cap'); });
+})();
 window.addEventListener('beforeunload', function (e) { if (ST.vista === 'exam') { e.preventDefault(); e.returnValue = ''; } });
 document.addEventListener('keydown', function (e) {
   if (e.key !== 'Enter' || ST.vista !== 'home') return;
