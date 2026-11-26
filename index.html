@@ -80,7 +80,7 @@ img.qi{max-width:100%;max-height:340px;border-radius:8px;margin:8px 0}
 /* ===== NUCLEO COMPARTIDO (Apps Script y modo demo) ===== */
 var ESQUEMA = {
   Cursos: ['id', 'nombre', 'descripcion', 'creado'],
-  Estudiantes: ['codigo', 'nombre', 'curso', 'correo', 'salt', 'hash', 'fallos', 'bloqueo'],
+  Estudiantes: ['codigo', 'nombre', 'curso', 'correo', 'salt', 'hash', 'fallos', 'bloqueo', 'resetHash', 'resetExp', 'resetInt'],
   Examenes: ['id', 'cursoId', 'titulo', 'descripcion', 'duracion', 'inicio', 'fin', 'estado', 'aleatorio', 'mostrarNota', 'intentos', 'cortarEnFin', 'preguntas', 'actualizado', 'sinRetroceso'],
   Docente: ['campo', 'valor'],
   Banco: ['id', 'cursoId', 'tipo', 'etiqueta', 'pregunta', 'actualizado'],
@@ -148,7 +148,7 @@ function tokenDe(e) { return sha256(codN(e.codigo) + '|' + e.hash + '|tk').slice
 
 /* ----- filas <-> objetos ----- */
 function cuFila(r) { return { id: S(r.id), nombre: S(r.nombre), descripcion: S(r.descripcion), creado: N(r.creado) }; }
-function estFila(r) { return { codigo: S(r.codigo), nombre: S(r.nombre), curso: S(r.curso), correo: S(r.correo), salt: S(r.salt), hash: S(r.hash), fallos: N(r.fallos), bloqueo: N(r.bloqueo) }; }
+function estFila(r) { return { codigo: S(r.codigo), nombre: S(r.nombre), curso: S(r.curso), correo: S(r.correo), salt: S(r.salt), hash: S(r.hash), fallos: N(r.fallos), bloqueo: N(r.bloqueo), resetHash: S(r.resetHash), resetExp: N(r.resetExp), resetInt: N(r.resetInt) }; }
 function estPub(e) { return { codigo: e.codigo, nombre: e.nombre, curso: e.curso, correo: e.correo, tienePass: !!e.hash }; }
 function exFila(r) {
   return { id: S(r.id), cursoId: S(r.cursoId), titulo: S(r.titulo), descripcion: S(r.descripcion), duracion: N(r.duracion), inicio: N(r.inicio), fin: N(r.fin), estado: S(r.estado) || 'borrador', aleatorio: B(r.aleatorio), mostrarNota: B(r.mostrarNota), intentos: N(r.intentos, 1) || 1, cortarEnFin: B(r.cortarEnFin), sinRetroceso: B(r.sinRetroceso), preguntas: J(r.preguntas, []), actualizado: N(r.actualizado) };
@@ -248,6 +248,8 @@ function handle(req, db, ctx) {
     if (a === 'ping') return { ok: true, now: now };
     if (a === 'estado') { var e0 = buscarEst(db, req.codigo); return e0 ? { ok: true, tienePass: !!e0.hash } : { ok: false, error: 'Ese código no está en la lista. Revisa que lo escribiste bien o consulta con tu docente.' }; }
     if (a === 'registrar') return registrar(req, db, now);
+    if (a === 'olvido') return olvido(req, db, ctx);
+    if (a === 'restablecer') return restablecer(req, db, now);
     if (a === 'login') return aLogin(req, db, now);
     if (ACC_EST.indexOf(a) >= 0) {
       var est = buscarEst(db, req.codigo);
@@ -271,7 +273,7 @@ function fijaClave(db, est, clave) { est.salt = nuevoId('s'); est.hash = hashCla
 function claveOk(clave) { return String(clave || '').length >= MIN_CLAVE; }
 function registrar(req, db, now) {
   var est = buscarEst(db, req.codigo); if (!est) return { ok: false, error: 'Ese código no está en la lista.' };
-  if (est.hash) return { ok: false, error: 'Ya creaste tu contraseña. Ingresa con ella (si la olvidaste, pide al docente que la restablezca).' };
+  if (est.hash) return { ok: false, error: 'Ya creaste tu contraseña. Ingresa con ella (si la olvidaste, usa «¿Olvidaste tu contraseña?» en la pantalla de ingreso).' };
   if (!claveOk(req.clave)) return { ok: false, error: 'La contraseña debe tener al menos ' + MIN_CLAVE + ' caracteres.' };
   fijaClave(db, est, String(req.clave)); cierraVencidos(db, now);
   return sesion(db, est, now);
@@ -287,6 +289,37 @@ function aLogin(req, db, now) {
   }
   if (est.fallos || est.bloqueo) { est.fallos = 0; est.bloqueo = 0; db.upsert('Estudiantes', 'codigo', est); }
   cierraVencidos(db, now);
+  return sesion(db, est, now);
+}
+function enmascara(c) { var p = S(c).split('@'); return p.length < 2 ? '' : p[0].slice(0, 2) + '***@' + p[1]; }
+var RESET_MIN = 15, RESET_INT = 5;
+function olvido(req, db, ctx) {
+  var now = ctx.now, est = buscarEst(db, req.codigo); if (!est) return { ok: false, error: 'Ese código no está en la lista.' };
+  if (!est.hash) return { ok: false, error: 'Aún no has creado tu contraseña. Créala ingresando con tu código.', crear: true };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(est.correo)) return { ok: false, error: 'No tienes un correo registrado en la lista. Pide a tu docente que restablezca tu contraseña.' };
+  if (est.resetExp && est.resetExp - (RESET_MIN - 1) * 60000 > now) return { ok: false, error: 'Ya te enviamos un código hace instantes. Espera un minuto antes de pedir otro y revisa también la carpeta de spam.' };
+  var rnd = ctx.rand || Math.random, code = String(100000 + Math.floor(rnd() * 900000));
+  est.resetHash = hashClave(est.salt, 'rst|' + code); est.resetExp = now + RESET_MIN * 60000; est.resetInt = 0;
+  if (ctx.correo) {
+    try { ctx.correo(est.correo, 'Código para restablecer tu contraseña - Plataforma de Evaluaciones UdeC', 'Hola ' + est.nombre + ',\n\nTu código para restablecer la contraseña es: ' + code + '\n\nVence en ' + RESET_MIN + ' minutos. Si no lo pediste tú, ignora este mensaje: tu contraseña no cambia.\n\nPlataforma de Evaluaciones - Universidad de Cartagena'); }
+    catch (e) { return { ok: false, error: 'No se pudo enviar el correo. Intenta más tarde o pide a tu docente que restablezca tu contraseña.' }; }
+  }
+  db.upsert('Estudiantes', 'codigo', est);
+  return { ok: true, correo: enmascara(est.correo), demoCodigo: ctx.correo ? undefined : code };
+}
+function restablecer(req, db, now) {
+  var est = buscarEst(db, req.codigo); if (!est) return { ok: false, error: 'Ese código no está en la lista.' };
+  if (!est.hash || !est.resetHash || est.resetExp < now) return { ok: false, error: 'El código venció o no existe. Solicita uno nuevo.' };
+  if (!claveOk(req.clave)) return { ok: false, error: 'La contraseña debe tener al menos ' + MIN_CLAVE + ' caracteres.' };
+  var c = S(req.codigoMail).replace(/\D/g, '');
+  if (hashClave(est.salt, 'rst|' + c) !== est.resetHash) {
+    est.resetInt++; var q = RESET_INT - est.resetInt;
+    if (q <= 0) { est.resetHash = ''; est.resetExp = 0; est.resetInt = 0; }
+    db.upsert('Estudiantes', 'codigo', est);
+    return { ok: false, error: q > 0 ? 'Código incorrecto. Te quedan ' + q + ' intento(s).' : 'Demasiados intentos. Solicita un código nuevo.' };
+  }
+  est.resetHash = ''; est.resetExp = 0; est.resetInt = 0;
+  fijaClave(db, est, String(req.clave)); cierraVencidos(db, now);
   return sesion(db, est, now);
 }
 function cambiarClave(req, db, est, now) {
@@ -410,7 +443,7 @@ function admin(a, req, db, now) {
     return { ok: true, total: orden.length, movidos: movidos };
   }
   if (a === 'adm_eliminarEstudiante') { var kk = codN(req.codigo); db.all('Estudiantes').forEach(function (r) { if (codN(r.codigo) === kk) db.remove('Estudiantes', 'codigo', S(r.codigo)); }); return { ok: true }; }
-  if (a === 'adm_resetClave') { var s2 = buscarEst(db, req.codigo); if (!s2) throw new Error('Estudiante no encontrado'); s2.salt = ''; s2.hash = ''; s2.fallos = 0; s2.bloqueo = 0; db.upsert('Estudiantes', 'codigo', s2); return { ok: true }; }
+  if (a === 'adm_resetClave') { var s2 = buscarEst(db, req.codigo); if (!s2) throw new Error('Estudiante no encontrado'); s2.salt = ''; s2.hash = ''; s2.fallos = 0; s2.bloqueo = 0; s2.resetHash = ''; s2.resetExp = 0; s2.resetInt = 0; db.upsert('Estudiantes', 'codigo', s2); return { ok: true }; }
   if (a === 'adm_banco') { return { ok: true, items: db.all('Banco').map(bcFila).filter(function (b) { return b.cursoId === S(req.cursoId); }).sort(function (x, y) { return y.actualizado - x.actualizado; }) }; }
   if (a === 'adm_guardarPreguntas') {
     if (!cursoPorId(db, req.cursoId)) throw new Error('Curso no encontrado');
@@ -542,7 +575,8 @@ function render() {
 function vHome() {
   var lg = ST.lg, e;
   if (lg.paso === 'codigo') e = '<p class="mu">Escribe tu código estudiantil (el que aparece en la lista del curso).</p><label class="f">Código estudiantil</label><input type="text" id="cod" autocomplete="off" placeholder="Ej. 2024010001"><div style="margin-top:12px"><button class="pr" data-act="lgContinuar">Continuar</button></div>';
-  else if (lg.paso === 'clave') e = '<p class="mu">Código: <b>' + esc(lg.codigo) + '</b></p><label class="f">Contraseña</label><input type="password" id="pw" autocomplete="current-password"><div class="row" style="margin-top:12px"><button class="pr" data-act="lgEntrar">Entrar</button><button data-act="lgAtras">Cambiar código</button></div><p class="mu">¿Olvidaste tu contraseña? Pide a tu docente que la restablezca.</p>';
+  else if (lg.paso === 'clave') e = '<p class="mu">Código: <b>' + esc(lg.codigo) + '</b></p><label class="f">Contraseña</label><input type="password" id="pw" autocomplete="current-password"><div class="row" style="margin-top:12px"><button class="pr" data-act="lgEntrar">Entrar</button><button data-act="lgAtras">Cambiar código</button></div><p class="mu"><a href="#" data-act="lgOlvido">¿Olvidaste tu contraseña?</a> Te enviaremos un código a tu correo registrado.</p>';
+  else if (lg.paso === 'reset') e = '<p>Enviamos un código de 6 dígitos a <b>' + esc(lg.correo) + '</b>. Vence en 15 minutos (revisa también el spam).</p>' + (lg.demo ? '<p class="warn">Modo demostración: tu código es <b>' + esc(lg.demo) + '</b></p>' : '') + '<label class="f">Código recibido</label><input type="text" id="cm" inputmode="numeric" autocomplete="one-time-code" maxlength="6"><label class="f">Nueva contraseña (mínimo ' + MIN_CLAVE + ' caracteres)</label><input type="password" id="pw1" autocomplete="new-password"><label class="f">Repite la contraseña</label><input type="password" id="pw2" autocomplete="new-password"><div class="row" style="margin-top:12px"><button class="pr" data-act="lgReset">Restablecer y entrar</button><button data-act="lgOlvido">Reenviar código</button><button data-act="lgAtras">Cancelar</button></div>';
   else e = '<p>Es tu primer ingreso con el código <b>' + esc(lg.codigo) + '</b>. Crea una contraseña (mínimo ' + MIN_CLAVE + ' caracteres) para tus próximos ingresos.</p><label class="f">Nueva contraseña</label><input type="password" id="pw1" autocomplete="new-password"><label class="f">Repite la contraseña</label><input type="password" id="pw2" autocomplete="new-password"><div class="row" style="margin-top:12px"><button class="pr" data-act="lgCrear">Crear contraseña y entrar</button><button data-act="lgAtras">Cambiar código</button></div>';
   return '<main><div class="grid2"><div class="card"><h2>Soy estudiante</h2>' + e + '</div>'
     + '<div class="card"><h2>Soy docente</h2><p class="mu">Administra cursos, exámenes, banco de preguntas y resultados.</p><label class="f">Clave de docente</label><input type="password" id="clave" autocomplete="off"><div style="margin-top:12px"><button class="pr" data-act="loginDoc">Entrar</button></div></div></div></main>';
@@ -847,6 +881,8 @@ function leerEstudiantes(file) {
 async function cargaDatos() { var r = await llamar('adm_datos'); if (r.ok) ST.datos = r; render(); return r; }
 var ACT = {
   async lgContinuar() { var c = $('cod').value.trim(); if (!c) return toast('Escribe tu código estudiantil', true); var r = await llamar('estado', { codigo: c }); if (r.ok) { ST.lg = { paso: r.tienePass ? 'clave' : 'crear', codigo: c }; render(); var f = $(r.tienePass ? 'pw' : 'pw1'); if (f) f.focus(); } },
+  async lgOlvido(t, ev) { if (ev && ev.preventDefault) ev.preventDefault(); var r = await llamar('olvido', { codigo: ST.lg.codigo }); if (r.ok) { ST.lg = { paso: 'reset', codigo: ST.lg.codigo, correo: r.correo, demo: r.demoCodigo || '' }; toast('Código enviado a tu correo'); render(); } else if (r.crear) { ST.lg.paso = 'crear'; render(); } },
+  async lgReset() { var c = $('cm').value.trim(), a = $('pw1').value, b = $('pw2').value; if (!/^\d{6}$/.test(c)) return toast('Escribe el código de 6 dígitos', true); if (a.length < MIN_CLAVE) return toast('La contraseña debe tener al menos ' + MIN_CLAVE + ' caracteres', true); if (a !== b) return toast('Las contraseñas no coinciden', true); var r = await llamar('restablecer', { codigo: ST.lg.codigo, codigoMail: c, clave: a }); if (r.ok) entra(r); },
   lgAtras() { ST.lg = { paso: 'codigo', codigo: '' }; render(); },
   async lgEntrar() { var r = await llamar('login', { codigo: ST.lg.codigo, clave: $('pw').value }); if (r.ok) entra(r); else if (r.crear) { ST.lg.paso = 'crear'; render(); } },
   async lgCrear() { var a = $('pw1').value, b = $('pw2').value; if (a.length < MIN_CLAVE) return toast('La contraseña debe tener al menos ' + MIN_CLAVE + ' caracteres', true); if (a !== b) return toast('Las contraseñas no coinciden', true); var r = await llamar('registrar', { codigo: ST.lg.codigo, clave: a }); if (r.ok) entra(r); },
