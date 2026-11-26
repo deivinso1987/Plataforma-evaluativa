@@ -82,6 +82,7 @@ var ESQUEMA = {
   Cursos: ['id', 'nombre', 'descripcion', 'creado'],
   Estudiantes: ['codigo', 'nombre', 'curso', 'correo', 'salt', 'hash', 'fallos', 'bloqueo'],
   Examenes: ['id', 'cursoId', 'titulo', 'descripcion', 'duracion', 'inicio', 'fin', 'estado', 'aleatorio', 'mostrarNota', 'intentos', 'cortarEnFin', 'preguntas', 'actualizado', 'sinRetroceso'],
+  Docente: ['campo', 'valor'],
   Banco: ['id', 'cursoId', 'tipo', 'etiqueta', 'pregunta', 'actualizado'],
   Intentos: ['id', 'examenId', 'codigo', 'nombre', 'curso', 'inicio', 'deadline', 'fin', 'estado', 'respuestas', 'puntajes', 'puntaje', 'total', 'nota', 'salidas', 'pendientes', 'semilla']
 };
@@ -213,6 +214,11 @@ function cierraVencidos(db, now) {
 function buscarEst(db, codigo) { var c = codN(codigo); if (!c) return null; var l = db.all('Estudiantes'); for (var i = 0; i < l.length; i++) if (codN(l[i].codigo) === c) return estFila(l[i]); return null; }
 function resumenInt(ex, it) { var o = { id: it.id, estado: it.estado }; if (it.estado === 'enviado' && ex.mostrarNota) { o.nota = it.nota; o.puntaje = it.puntaje; o.total = it.total; o.pendientes = it.pendientes; } return o; }
 
+function perfilDoc(db) {
+  var p = { nombre: 'Deivinso Villa Moncaris', correo: 'dvillam2@unicartagena.edu.co', cargo: 'Docente de cátedra', institucion: 'Universidad de Cartagena', telefono: '' };
+  db.all('Docente').forEach(function (r) { var k = S(r.campo); if (k in p) p[k] = S(r.valor); });
+  return p;
+}
 /* ----- validacion ----- */
 function validarPregunta(q, n, ids) {
   if (TIPOS.indexOf(q.tipo) < 0) throw new Error(n + 'tipo no válido');
@@ -341,7 +347,14 @@ function admin(a, req, db, now) {
     var cnt = {}, bn = {};
     db.all('Intentos').map(intFila).forEach(function (i) { var c = cnt[i.examenId] = cnt[i.examenId] || { enviados: 0, enCurso: 0 }; if (i.estado === 'enviado') c.enviados++; else c.enCurso++; });
     db.all('Banco').forEach(function (r) { bn[S(r.cursoId)] = (bn[S(r.cursoId)] || 0) + 1; });
-    return { ok: true, now: now, cursos: db.all('Cursos').map(cuFila), examenes: db.all('Examenes').map(exFila), estudiantes: db.all('Estudiantes').map(estFila).map(estPub), conteo: cnt, bancoN: bn };
+    return { ok: true, now: now, cursos: db.all('Cursos').map(cuFila), examenes: db.all('Examenes').map(exFila), estudiantes: db.all('Estudiantes').map(estFila).map(estPub), conteo: cnt, bancoN: bn, perfil: perfilDoc(db) };
+  }
+  if (a === 'adm_guardarPerfil') {
+    var pf = req.perfil || {}, ks = ['nombre', 'correo', 'cargo', 'institucion', 'telefono'];
+    if (!S(pf.nombre)) throw new Error('El nombre es obligatorio');
+    if (S(pf.correo) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(S(pf.correo))) throw new Error('El correo no es válido');
+    ks.forEach(function (k) { db.upsert('Docente', 'campo', { campo: k, valor: S(pf[k]).slice(0, 120) }); });
+    return { ok: true, perfil: perfilDoc(db) };
   }
   if (a === 'adm_guardarCurso') {
     var c = cuFila(req.curso || {}); if (!c.nombre) throw new Error('El curso necesita un nombre');
@@ -610,11 +623,15 @@ async function enviar(auto) {
 function tabsH(list, cur, act) { return '<div class="tabs">' + list.map(function (t) { return '<button data-act="' + act + '" data-t="' + t[0] + '" class="' + (cur === t[0] ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div>'; }
 function cursoActual() { return ST.datos.cursos.filter(function (c) { return c.id === ST.cursoId; })[0]; }
 function nomCurso(id) { var c = ST.datos.cursos.filter(function (x) { return x.id === id; })[0]; return c ? c.nombre : '(curso eliminado)'; }
+function perfilH() {
+  var p = (ST.datos && ST.datos.perfil) || {}, l = [p.cargo, p.institucion].filter(Boolean).join(' · ');
+  return '<div class="card row sp" style="margin-bottom:12px"><div><div style="font-size:18px;font-weight:700">' + esc(p.nombre || 'Docente') + '</div>' + (l ? '<div class="mu">' + esc(l) + '</div>' : '') + '<div class="mu">' + (p.correo ? esc(p.correo) : '') + (p.telefono ? (p.correo ? ' · ' : '') + esc(p.telefono) : '') + '</div></div><button data-act="editarPerfil">Editar perfil</button></div>';
+}
 function vAdm() {
   var h = '<main>';
   if (!ST.datos) return h + '<div class="card mu">Cargando…</div></main>';
   if (ST.edit) return h + vEditor() + '</main>';
-  if (!ST.cursoId) return h + tabsH([['cursos', 'Cursos'], ['prog', 'Programación']], ST.atab, 'tab') + (ST.atab === 'prog' ? tProg() : tCursos()) + '</main>';
+  if (!ST.cursoId) return h + perfilH() + tabsH([['cursos', 'Cursos'], ['prog', 'Programación']], ST.atab, 'tab') + (ST.atab === 'prog' ? tProg() : tCursos()) + '</main>';
   var cu = cursoActual(); if (!cu) { ST.cursoId = ''; return vAdm(); }
   h += '<div class="row" style="margin-bottom:8px"><button data-act="volverCursos">← Cursos</button><h2 style="margin:0">' + esc(cu.nombre) + '</h2></div>' + tabsH([['sesiones', 'Sesiones de examen'], ['banco', 'Banco de preguntas'], ['estud', 'Estudiantes'], ['res', 'Resultados']], ST.ctab, 'ctab');
   return h + ({ sesiones: tSesiones, banco: tBanco, estud: tEstud, res: tRes })[ST.ctab](cu) + '</main>';
@@ -840,6 +857,8 @@ var ACT = {
   ctab(t) { ST.ctab = t.dataset.t; ST.edit = null; render(); },
   volverCursos() { ST.cursoId = ''; ST.atab = 'cursos'; ST.res = null; ST.edit = null; ST.bancoCurso = ''; render(); },
   abrirCurso(t) { ST.cursoId = t.dataset.id; ST.ctab = 'sesiones'; ST.res = null; ST.bancoCurso = ''; ST.bf = { q: '', t: '', e: '' }; ST.filtroEst = ''; render(); window.scrollTo(0, 0); },
+  editarPerfil() { var p = ST.datos.perfil || {}; ST.modal = '<h3>Perfil del docente</h3><label class="f">Nombre y apellido</label><input type="text" id="pf_n" value="' + esc(p.nombre || '') + '"><label class="f">Correo</label><input type="text" id="pf_c" value="' + esc(p.correo || '') + '"><label class="f">Cargo</label><input type="text" id="pf_k" value="' + esc(p.cargo || '') + '"><label class="f">Institución</label><input type="text" id="pf_i" value="' + esc(p.institucion || '') + '"><label class="f">Teléfono (opcional)</label><input type="text" id="pf_t" value="' + esc(p.telefono || '') + '"><div class="row" style="margin-top:12px"><button class="pr" data-act="guardaPerfil">Guardar</button><button data-act="cerrarModal">Cancelar</button></div>'; render(); },
+  async guardaPerfil() { var r = await llamar('adm_guardarPerfil', { perfil: { nombre: $('pf_n').value, correo: $('pf_c').value, cargo: $('pf_k').value, institucion: $('pf_i').value, telefono: $('pf_t').value } }); if (r.ok) { ST.modal = ''; toast('Perfil guardado'); await cargaDatos(); } },
   nuevoCurso() { ST.modal = '<h3>Nuevo curso</h3><label class="f">Nombre del curso</label><input type="text" id="cn" placeholder="Ej. Cálculo Integral - Biología"><label class="f">Descripción (opcional)</label><input type="text" id="cd"><div class="row" style="margin-top:12px"><button class="pr" data-act="guardaCurso" data-id="">Crear curso</button><button data-act="cerrarModal">Cancelar</button></div>'; render(); },
   editCurso(t) { var c = ST.datos.cursos.filter(function (x) { return x.id === t.dataset.id; })[0]; ST.modal = '<h3>Editar curso</h3><label class="f">Nombre del curso</label><input type="text" id="cn" value="' + esc(c.nombre) + '"><label class="f">Descripción (opcional)</label><input type="text" id="cd" value="' + esc(c.descripcion) + '"><div class="row" style="margin-top:12px"><button class="pr" data-act="guardaCurso" data-id="' + esc(c.id) + '">Guardar</button><button data-act="cerrarModal">Cancelar</button></div>'; render(); },
   async guardaCurso(t) { var r = await llamar('adm_guardarCurso', { curso: { id: t.dataset.id, nombre: $('cn').value, descripcion: $('cd').value } }); if (r.ok) { ST.modal = ''; toast('Curso guardado'); await cargaDatos(); } },
