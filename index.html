@@ -561,6 +561,7 @@ function entra(r, guarda) {
 
 /* ===================== RENDER GENERAL ===================== */
 function render() {
+  if (ST.vista !== 'exam') document.body.classList.remove('cap');
   var h = '';
   if (DEMO) h += '<div class="demo">MODO DEMO: los datos viven solo en este navegador. Clave de docente: <b>demo</b> · Códigos de estudiante de prueba: 1001, 1002 (la primera vez creas tu contraseña)</div>';
   if (ST.vista !== 'exam') {
@@ -1013,6 +1014,7 @@ ACT.volverFS = async function () { ST.modal = ''; render(); try { await document
   document.addEventListener('visibilitychange', function () { if (ST.vista === 'exam') { if (document.hidden) document.body.classList.add('cap'); else if (document.hasFocus()) document.body.classList.remove('cap'); } });
   window.addEventListener('beforeprint', function () { if (ST.vista === 'exam') document.body.classList.add('cap'); });
   window.addEventListener('afterprint', function () { document.body.classList.remove('cap'); });
+  document.addEventListener('pointerdown', function () { if (document.hasFocus()) document.body.classList.remove('cap'); }, true);
 })();
 window.addEventListener('beforeunload', function (e) { if (ST.vista === 'exam') { e.preventDefault(); e.returnValue = ''; } });
 document.addEventListener('keydown', function (e) {
