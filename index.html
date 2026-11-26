@@ -8,12 +8,13 @@
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <style>
-:root{--p:#0f766e;--pd:#134e4a;--pl:#ccfbf1;--bg:#f0fdfa;--tx:#0f172a;--mu:#64748b;--bd:#cbd5e1;--ok:#15803d;--er:#b91c1c;--wa:#b45309}
+:root{--p:#a63c24;--pd:#7a2a18;--pl:#fcefd6;--bg:#faf6ef;--gold:#e79d19;--tx:#0f172a;--mu:#64748b;--bd:#cbd5e1;--ok:#15803d;--er:#b91c1c;--wa:#b45309}
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--tx);min-height:100vh}
-header.top{background:linear-gradient(90deg,var(--pd),var(--p));color:#fff;padding:12px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header.top{background:#fff;color:var(--pd);border-top:6px solid var(--p);border-bottom:5px solid var(--gold);padding:8px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;box-shadow:0 2px 6px rgba(0,0,0,.08)}
+header.top img.logo{height:56px;width:auto}
 header.top h1{font-size:18px;margin:0;flex:1;min-width:200px}
-header.top small{opacity:.85;display:block;font-weight:400;font-size:12px}
+header.top small{color:var(--mu);display:block;font-weight:400;font-size:12px}
 main{max-width:1100px;margin:0 auto;padding:18px}
 .card{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
 .card h2,.card h3{margin:0 0 10px}
@@ -39,9 +40,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{padding:7px 8px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}
 th{background:#f1f5f9;font-size:12px;color:var(--mu);text-transform:uppercase}
-tr.cl:hover{background:#f0fdfa;cursor:pointer}
+tr.cl:hover{background:#fdf6e8;cursor:pointer}
 .mu{color:var(--mu);font-size:13px}
-.qcard{border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:12px;background:#fcfffe}
+.qcard{border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:12px;background:#fffdf9}
 .qh{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
 .pv{background:#f8fafc;border:1px dashed var(--bd);border-radius:8px;padding:6px 10px;margin-top:4px;min-height:24px;font-size:15px}
 .opt{display:flex;gap:6px;align-items:center;margin:5px 0}.opt input[type=text]{flex:1}
@@ -517,7 +518,7 @@ function render() {
   var h = '';
   if (DEMO) h += '<div class="demo">MODO DEMO: los datos viven solo en este navegador. Clave de docente: <b>demo</b> · Códigos de estudiante de prueba: 1001, 1002 (la primera vez creas tu contraseña)</div>';
   if (ST.vista !== 'exam') {
-    h += '<header class="top"><h1>Plataforma de Evaluaciones<small>Universidad de Cartagena</small></h1>';
+    h += '<header class="top"><img class="logo" src="https://unicartagena.edu.co/images/logo/logo-unicaragena.svg" alt="Universidad de Cartagena" onerror="this.remove()"><h1>Plataforma de Evaluaciones<small>Universidad de Cartagena</small></h1>';
     if (ST.vista !== 'home') h += '<button data-act="salir">Salir</button>';
     h += '</header>';
   }
