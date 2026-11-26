@@ -575,7 +575,7 @@ function vExam() {
     h += '<p class="mu">Elige para cada elemento su pareja.</p>';
     q.izq.forEach(function (it, i) { h += '<div class="row" style="margin:8px 0"><div style="flex:1;min-width:140px">' + rich(it) + '</div><select data-inp="emp" data-i="' + i + '" style="flex:1;min-width:140px"><option value="">— elegir —</option>' + q.der.map(function (d, k) { return '<option value="' + k + '"' + (String(arr[i]) === String(k) && arr[i] !== '' && arr[i] != null ? ' selected' : '') + '>' + esc(plain(d) || d) + '</option>'; }).join('') + '</select></div>'; });
   }
-  h += '<div class="row sp" style="margin-top:14px"><button data-act="irQ" data-i="' + (qi - 1) + '"' + (qi === 0 ? ' disabled' : '') + '>← Anterior</button><button data-act="irQ" data-i="' + (qi + 1) + '"' + (qi === ord.length - 1 ? ' disabled' : '') + '>Siguiente →</button></div></div></main>';
+  h += '<div class="row sp" style="margin-top:14px"><button data-act="irQ" data-i="' + (qi - 1) + '"' + (qi === 0 ? ' disabled' : '') + '>← Anterior</button>' + (qi === ord.length - 1 ? '<button class="pr" data-act="pedirEnvio">Finalizar y enviar</button>' : '<button data-act="irQ" data-i="' + (qi + 1) + '">Siguiente →</button>') + '</div></div></main>';
   return h;
 }
 function vFin() {
