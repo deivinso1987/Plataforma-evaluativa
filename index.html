@@ -68,6 +68,7 @@ tr.cl:hover{background:#f0fdfa;cursor:pointer}
 .demo{background:#fef3c7;color:#92400e;padding:6px 14px;font-size:13px;text-align:center}
 .warn{background:#fee2e2;color:var(--er);padding:8px 12px;border-radius:8px;margin-bottom:10px;font-weight:600}
 img.qi{max-width:100%;max-height:340px;border-radius:8px;margin:8px 0}
+.pickrow{display:flex;gap:8px;align-items:flex-start;padding:8px;border-bottom:1px solid #e2e8f0;cursor:pointer}
 .katex-display{overflow-x:auto;overflow-y:hidden}
 @media(max-width:600px){main{padding:10px}.ex-top h2{flex-basis:100%}}
 </style>
@@ -77,13 +78,15 @@ img.qi{max-width:100%;max-height:340px;border-radius:8px;margin:8px 0}
 <script>
 /* ===== NUCLEO COMPARTIDO (Apps Script y modo demo) ===== */
 var ESQUEMA = {
-  Estudiantes: ['cedula', 'nombre', 'curso', 'correo'],
-  Examenes: ['id', 'titulo', 'curso', 'descripcion', 'duracion', 'inicio', 'fin', 'estado', 'aleatorio', 'mostrarNota', 'intentos', 'cortarEnFin', 'preguntas', 'actualizado'],
-  Intentos: ['id', 'examenId', 'cedula', 'nombre', 'curso', 'inicio', 'deadline', 'fin', 'estado', 'respuestas', 'puntajes', 'puntaje', 'total', 'nota', 'salidas', 'pendientes', 'semilla']
+  Cursos: ['id', 'nombre', 'descripcion', 'creado'],
+  Estudiantes: ['codigo', 'nombre', 'curso', 'correo', 'salt', 'hash', 'fallos', 'bloqueo'],
+  Examenes: ['id', 'cursoId', 'titulo', 'descripcion', 'duracion', 'inicio', 'fin', 'estado', 'aleatorio', 'mostrarNota', 'intentos', 'cortarEnFin', 'preguntas', 'actualizado'],
+  Banco: ['id', 'cursoId', 'tipo', 'etiqueta', 'pregunta', 'actualizado'],
+  Intentos: ['id', 'examenId', 'codigo', 'nombre', 'curso', 'inicio', 'deadline', 'fin', 'estado', 'respuestas', 'puntajes', 'puntaje', 'total', 'nota', 'salidas', 'pendientes', 'semilla']
 };
-var NOTA_MAX = 5, GRACIA = 25000, TIPOS = ['mc', 'vf', 'num', 'abierta', 'empareja'];
+var NOTA_MAX = 5, GRACIA = 25000, TIPOS = ['mc', 'vf', 'num', 'abierta', 'empareja'], MAX_FALLOS = 5, BLOQUEO_MIN = 5, MIN_CLAVE = 6;
 function S(v) { return v == null ? '' : String(v).trim(); }
-function cedN(v) { return S(v).replace(/[^0-9A-Za-z]/g, '').toLowerCase(); }
+function codN(v) { return S(v).replace(/[^0-9A-Za-z]/g, '').toLowerCase(); }
 function B(v) { return v === true || v === 1 || /^(true|1|si|sí)$/i.test(S(v)); }
 function N(v, d) { var x = Number(v); return (S(v) !== '' && isFinite(x)) ? x : (d || 0); }
 function J(v, d) { if (v === '' || v == null) return d; if (typeof v === 'object') return v; try { return JSON.parse(v); } catch (e) { return d; } }
@@ -98,17 +101,68 @@ function rng(seed) {
 function perm(n, seed) { var r = rng(String(seed)), p = [], i, j, t; for (i = 0; i < n; i++) p.push(i); for (i = n - 1; i > 0; i--) { j = Math.floor(r() * (i + 1)); t = p[i]; p[i] = p[j]; p[j] = t; } return p; }
 function nuevoId(p) { return p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
+/* ----- SHA-256 en JS puro (igual en Apps Script y en el navegador) ----- */
+function utf8(s) {
+  var o = '', i, c;
+  for (i = 0; i < s.length; i++) {
+    c = s.charCodeAt(i);
+    if (c >= 0xD800 && c < 0xDC00 && i + 1 < s.length) c = 0x10000 + ((c - 0xD800) << 10) + (s.charCodeAt(++i) - 0xDC00);
+    if (c < 128) o += String.fromCharCode(c);
+    else if (c < 2048) o += String.fromCharCode(192 | c >> 6, 128 | c & 63);
+    else if (c < 65536) o += String.fromCharCode(224 | c >> 12, 128 | c >> 6 & 63, 128 | c & 63);
+    else o += String.fromCharCode(240 | c >> 18, 128 | c >> 12 & 63, 128 | c >> 6 & 63, 128 | c & 63);
+  }
+  return o;
+}
+function ror(v, n) { return (v >>> n) | (v << (32 - n)); }
+function sha256(msg) {
+  var K = sha256.K, H0 = sha256.H, i, j, c, p;
+  if (!K) {
+    K = sha256.K = []; H0 = sha256.H = [];
+    for (p = 0, c = 2; p < 64; c++) {
+      for (j = 2; j * j <= c && c % j; j++);
+      if (j * j > c) { if (p < 8) H0[p] = (Math.pow(c, 0.5) % 1) * 4294967296 | 0; K[p++] = (Math.pow(c, 1 / 3) % 1) * 4294967296 | 0; }
+    }
+  }
+  var b = utf8(String(msg)), l = b.length, w = [], n = (((l + 8) >> 6) + 1) * 16, h = H0.slice();
+  for (i = 0; i < l; i++) w[i >> 2] |= b.charCodeAt(i) << (24 - (i % 4) * 8);
+  w[l >> 2] |= 0x80 << (24 - (l % 4) * 8);
+  for (i = 0; i < n; i++) w[i] = w[i] | 0;
+  w[n - 1] = l * 8;
+  for (var o = 0; o < n; o += 16) {
+    var x = w.slice(o, o + 16);
+    for (i = 16; i < 64; i++) { var s0 = ror(x[i - 15], 7) ^ ror(x[i - 15], 18) ^ (x[i - 15] >>> 3), s1 = ror(x[i - 2], 17) ^ ror(x[i - 2], 19) ^ (x[i - 2] >>> 10); x[i] = (x[i - 16] + s0 + x[i - 7] + s1) | 0; }
+    var a = h[0], bb = h[1], cc = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+    for (i = 0; i < 64; i++) {
+      var t1 = (hh + (ror(e, 6) ^ ror(e, 11) ^ ror(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + x[i]) | 0, t2 = ((ror(a, 2) ^ ror(a, 13) ^ ror(a, 22)) + ((a & bb) ^ (a & cc) ^ (bb & cc))) | 0;
+      hh = g; g = f; f = e; e = (d + t1) | 0; d = cc; cc = bb; bb = a; a = (t1 + t2) | 0;
+    }
+    h[0] = (h[0] + a) | 0; h[1] = (h[1] + bb) | 0; h[2] = (h[2] + cc) | 0; h[3] = (h[3] + d) | 0; h[4] = (h[4] + e) | 0; h[5] = (h[5] + f) | 0; h[6] = (h[6] + g) | 0; h[7] = (h[7] + hh) | 0;
+  }
+  return h.map(function (v) { return ('00000000' + (v >>> 0).toString(16)).slice(-8); }).join('');
+}
+function hashClave(salt, clave) { var h = sha256(salt + '|' + clave), i; for (i = 0; i < 300; i++) h = sha256(h + salt); return 'h' + h; }
+function tokenDe(e) { return sha256(codN(e.codigo) + '|' + e.hash + '|tk').slice(0, 40); }
+
+/* ----- filas <-> objetos ----- */
+function cuFila(r) { return { id: S(r.id), nombre: S(r.nombre), descripcion: S(r.descripcion), creado: N(r.creado) }; }
+function estFila(r) { return { codigo: S(r.codigo), nombre: S(r.nombre), curso: S(r.curso), correo: S(r.correo), salt: S(r.salt), hash: S(r.hash), fallos: N(r.fallos), bloqueo: N(r.bloqueo) }; }
+function estPub(e) { return { codigo: e.codigo, nombre: e.nombre, curso: e.curso, correo: e.correo, tienePass: !!e.hash }; }
 function exFila(r) {
-  return { id: S(r.id), titulo: S(r.titulo), curso: S(r.curso), descripcion: S(r.descripcion), duracion: N(r.duracion), inicio: N(r.inicio), fin: N(r.fin), estado: S(r.estado) || 'borrador', aleatorio: B(r.aleatorio), mostrarNota: B(r.mostrarNota), intentos: N(r.intentos, 1) || 1, cortarEnFin: B(r.cortarEnFin), preguntas: J(r.preguntas, []), actualizado: N(r.actualizado) };
+  return { id: S(r.id), cursoId: S(r.cursoId), titulo: S(r.titulo), descripcion: S(r.descripcion), duracion: N(r.duracion), inicio: N(r.inicio), fin: N(r.fin), estado: S(r.estado) || 'borrador', aleatorio: B(r.aleatorio), mostrarNota: B(r.mostrarNota), intentos: N(r.intentos, 1) || 1, cortarEnFin: B(r.cortarEnFin), preguntas: J(r.preguntas, []), actualizado: N(r.actualizado) };
 }
 function exAFila(e) { var o = {}; for (var k in e) o[k] = e[k]; o.preguntas = JSON.stringify(e.preguntas || []); return o; }
+function bcFila(r) { return { id: S(r.id), cursoId: S(r.cursoId), tipo: S(r.tipo), etiqueta: S(r.etiqueta), pregunta: J(r.pregunta, {}), actualizado: N(r.actualizado) }; }
+function bcAFila(b) { var o = {}; for (var k in b) o[k] = b[k]; o.pregunta = JSON.stringify(b.pregunta || {}); return o; }
 function intFila(r) {
-  return { id: S(r.id), examenId: S(r.examenId), cedula: S(r.cedula), nombre: S(r.nombre), curso: S(r.curso), inicio: N(r.inicio), deadline: N(r.deadline), fin: N(r.fin), estado: S(r.estado), respuestas: J(r.respuestas, {}), puntajes: J(r.puntajes, {}), puntaje: N(r.puntaje), total: N(r.total), nota: N(r.nota), salidas: N(r.salidas), pendientes: B(r.pendientes), semilla: S(r.semilla) };
+  return { id: S(r.id), examenId: S(r.examenId), codigo: S(r.codigo), nombre: S(r.nombre), curso: S(r.curso), inicio: N(r.inicio), deadline: N(r.deadline), fin: N(r.fin), estado: S(r.estado), respuestas: J(r.respuestas, {}), puntajes: J(r.puntajes, {}), puntaje: N(r.puntaje), total: N(r.total), nota: N(r.nota), salidas: N(r.salidas), pendientes: B(r.pendientes), semilla: S(r.semilla) };
 }
 function intAFila(i) { var o = {}; for (var k in i) o[k] = i[k]; o.respuestas = JSON.stringify(i.respuestas || {}); o.puntajes = JSON.stringify(i.puntajes || {}); return o; }
 function ventana(e, now) { if (e.inicio && now < e.inicio) return 'proximo'; if (e.fin && now > e.fin) return 'cerrado'; return 'abierto'; }
-function cursoOk(e, est) { var c = S(e.curso).toLowerCase(); return !c || c === 'todos' || c === S(est.curso).toLowerCase(); }
+function cursoPorId(db, id) { var l = db.all('Cursos'); for (var i = 0; i < l.length; i++) if (S(l[i].id) === S(id)) return cuFila(l[i]); return null; }
+function mismoCurso(a, b) { return S(a).toLowerCase() === S(b).toLowerCase() && S(a) !== ''; }
 
+/* ----- calificacion ----- */
 function numVal(a) { var t = S(a).replace(',', '.').replace(/\s/g, ''), m = t.match(/^(-?\d*\.?\d+)\/(\d*\.?\d+)$/); if (m) return Number(m[1]) / Number(m[2]); return t === '' ? NaN : Number(t); }
 function calificar(ex, resp, semilla, prev) {
   var det = {}, sum = 0, tot = 0, pend = false;
@@ -155,36 +209,47 @@ function cierraVencidos(db, now) {
     if (it.estado === 'en curso' && it.deadline + GRACIA < now) { var ex = buscarEx(db, it.examenId, cache); if (ex) finaliza(db, it, ex, it.respuestas, it.deadline); }
   });
 }
-function buscarEst(db, cedula) { var c = cedN(cedula); if (!c) return null; var l = db.all('Estudiantes'); for (var i = 0; i < l.length; i++) if (cedN(l[i].cedula) === c) return { cedula: S(l[i].cedula), nombre: S(l[i].nombre), curso: S(l[i].curso), correo: S(l[i].correo) }; return null; }
+function buscarEst(db, codigo) { var c = codN(codigo); if (!c) return null; var l = db.all('Estudiantes'); for (var i = 0; i < l.length; i++) if (codN(l[i].codigo) === c) return estFila(l[i]); return null; }
 function resumenInt(ex, it) { var o = { id: it.id, estado: it.estado }; if (it.estado === 'enviado' && ex.mostrarNota) { o.nota = it.nota; o.puntaje = it.puntaje; o.total = it.total; o.pendientes = it.pendientes; } return o; }
 
+/* ----- validacion ----- */
+function validarPregunta(q, n, ids) {
+  if (TIPOS.indexOf(q.tipo) < 0) throw new Error(n + 'tipo no válido');
+  if (!S(q.enunciado)) throw new Error(n + 'falta el enunciado');
+  if (!q.id || (ids && ids[q.id])) q.id = nuevoId('q'); if (ids) ids[q.id] = 1;
+  q.puntos = N(q.puntos, 1); if (q.puntos <= 0) throw new Error(n + 'los puntos deben ser mayores que 0');
+  if (q.imagen && !/^https?:\/\//i.test(S(q.imagen))) throw new Error(n + 'la imagen debe ser un enlace http(s)');
+  if (q.tipo === 'mc') {
+    q.opciones = (q.opciones || []).map(S); if (q.opciones.length < 2 || q.opciones.some(function (o) { return !o; })) throw new Error(n + 'completa al menos dos opciones (sin vacías)');
+    q.correcta = N(q.correcta); if (q.correcta < 0 || q.correcta >= q.opciones.length) throw new Error(n + 'marca la opción correcta');
+  } else if (q.tipo === 'vf') { q.correcta = B(q.correcta); }
+  else if (q.tipo === 'num') { if (!isFinite(numVal(q.correcta))) throw new Error(n + 'la respuesta numérica no es válida'); q.correcta = S(q.correcta); q.tolerancia = Math.abs(N(q.tolerancia)); }
+  else if (q.tipo === 'empareja') { q.pares = (q.pares || []).map(function (p) { return [S(p[0]), S(p[1])]; }); if (q.pares.length < 2 || q.pares.some(function (p) { return !p[0] || !p[1]; })) throw new Error(n + 'completa al menos dos parejas'); }
+}
 function validarExamen(e) {
   if (!S(e.titulo)) throw new Error('El examen necesita un título');
   if (!Array.isArray(e.preguntas) || !e.preguntas.length) throw new Error('Agrega al menos una pregunta');
   var ids = {};
-  e.preguntas.forEach(function (q, i) {
-    var n = 'Pregunta ' + (i + 1) + ': ';
-    if (TIPOS.indexOf(q.tipo) < 0) throw new Error(n + 'tipo no válido');
-    if (!S(q.enunciado)) throw new Error(n + 'falta el enunciado');
-    if (!q.id || ids[q.id]) q.id = nuevoId('q'); ids[q.id] = 1;
-    q.puntos = N(q.puntos, 1); if (q.puntos <= 0) throw new Error(n + 'los puntos deben ser mayores que 0');
-    if (q.imagen && !/^https?:\/\//i.test(S(q.imagen))) throw new Error(n + 'la imagen debe ser un enlace http(s)');
-    if (q.tipo === 'mc') {
-      q.opciones = (q.opciones || []).map(S); if (q.opciones.length < 2 || q.opciones.some(function (o) { return !o; })) throw new Error(n + 'completa al menos dos opciones (sin vacías)');
-      q.correcta = N(q.correcta); if (q.correcta < 0 || q.correcta >= q.opciones.length) throw new Error(n + 'marca la opción correcta');
-    } else if (q.tipo === 'vf') { q.correcta = B(q.correcta); }
-    else if (q.tipo === 'num') { if (!isFinite(numVal(q.correcta))) throw new Error(n + 'la respuesta numérica no es válida'); q.correcta = S(q.correcta); q.tolerancia = Math.abs(N(q.tolerancia)); }
-    else if (q.tipo === 'empareja') { q.pares = (q.pares || []).map(function (p) { return [S(p[0]), S(p[1])]; }); if (q.pares.length < 2 || q.pares.some(function (p) { return !p[0] || !p[1]; })) throw new Error(n + 'completa al menos dos parejas'); }
-  });
+  e.preguntas.forEach(function (q, i) { validarPregunta(q, 'Pregunta ' + (i + 1) + ': ', ids); });
 }
 
+/* ----- enrutador ----- */
+var ACC_EST = ['lista', 'iniciar', 'guardar', 'enviar', 'cambiarClave'];
 function handle(req, db, ctx) {
   var now = ctx.now, a = S(req.action);
   try {
     if (a === 'ping') return { ok: true, now: now };
-    if (a === 'login') { cierraVencidos(db, now); return login(req, db, now); }
-    if (a === 'iniciar') return iniciar(req, db, now);
-    if (a === 'guardar' || a === 'enviar') return guardarEnviar(req, db, now, a === 'enviar');
+    if (a === 'estado') { var e0 = buscarEst(db, req.codigo); return e0 ? { ok: true, tienePass: !!e0.hash } : { ok: false, error: 'Ese código no está en la lista. Revisa que lo escribiste bien o consulta con tu docente.' }; }
+    if (a === 'registrar') return registrar(req, db, now);
+    if (a === 'login') return aLogin(req, db, now);
+    if (ACC_EST.indexOf(a) >= 0) {
+      var est = buscarEst(db, req.codigo);
+      if (!est || !est.hash || !req.token || req.token !== tokenDe(est)) return { ok: false, sesion: true, error: 'Tu sesión no es válida. Vuelve a ingresar.' };
+      if (a === 'lista') { cierraVencidos(db, now); return sesion(db, est, now); }
+      if (a === 'cambiarClave') return cambiarClave(req, db, est, now);
+      if (a === 'iniciar') return iniciar(req, db, est, now);
+      return guardarEnviar(req, db, est, now, a === 'enviar');
+    }
     if (a.indexOf('adm_') === 0) {
       if (!S(ctx.clave) || S(ctx.clave) === 'CAMBIA_ESTA_CLAVE') return { ok: false, error: 'Falta configurar la clave del docente en Code.gs' };
       if (S(req.clave) !== S(ctx.clave)) return { ok: false, error: 'Clave de docente incorrecta' };
@@ -194,23 +259,52 @@ function handle(req, db, ctx) {
   } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 }
 
-function login(req, db, now) {
-  var est = buscarEst(db, req.cedula);
-  if (!est) return { ok: false, error: 'Tu cédula no está en la lista de estudiantes. Consulta con el docente.' };
-  var ints = db.all('Intentos').map(intFila).filter(function (i) { return cedN(i.cedula) === cedN(est.cedula); });
-  var lista = db.all('Examenes').map(exFila).filter(function (e) { return e.estado === 'publicado' && cursoOk(e, est); }).map(function (e) {
+/* ----- estudiante: acceso ----- */
+function fijaClave(db, est, clave) { est.salt = nuevoId('s'); est.hash = hashClave(est.salt, clave); est.fallos = 0; est.bloqueo = 0; db.upsert('Estudiantes', 'codigo', est); }
+function claveOk(clave) { return String(clave || '').length >= MIN_CLAVE; }
+function registrar(req, db, now) {
+  var est = buscarEst(db, req.codigo); if (!est) return { ok: false, error: 'Ese código no está en la lista.' };
+  if (est.hash) return { ok: false, error: 'Ya creaste tu contraseña. Ingresa con ella (si la olvidaste, pide al docente que la restablezca).' };
+  if (!claveOk(req.clave)) return { ok: false, error: 'La contraseña debe tener al menos ' + MIN_CLAVE + ' caracteres.' };
+  fijaClave(db, est, String(req.clave)); cierraVencidos(db, now);
+  return sesion(db, est, now);
+}
+function aLogin(req, db, now) {
+  var est = buscarEst(db, req.codigo); if (!est) return { ok: false, error: 'Ese código no está en la lista.' };
+  if (!est.hash) return { ok: false, error: 'Aún no has creado tu contraseña.', crear: true };
+  if (est.bloqueo > now) return { ok: false, error: 'Demasiados intentos fallidos. Intenta de nuevo en ' + Math.ceil((est.bloqueo - now) / 60000) + ' min.' };
+  if (hashClave(est.salt, String(req.clave || '')) !== est.hash) {
+    est.fallos++; var quedan = MAX_FALLOS - est.fallos; if (quedan <= 0) { est.bloqueo = now + BLOQUEO_MIN * 60000; est.fallos = 0; }
+    db.upsert('Estudiantes', 'codigo', est);
+    return { ok: false, error: quedan > 0 ? 'Contraseña incorrecta. Te quedan ' + quedan + ' intento(s).' : 'Demasiados intentos fallidos. Espera ' + BLOQUEO_MIN + ' minutos.' };
+  }
+  if (est.fallos || est.bloqueo) { est.fallos = 0; est.bloqueo = 0; db.upsert('Estudiantes', 'codigo', est); }
+  cierraVencidos(db, now);
+  return sesion(db, est, now);
+}
+function cambiarClave(req, db, est, now) {
+  if (hashClave(est.salt, String(req.actual || '')) !== est.hash) return { ok: false, error: 'La contraseña actual no es correcta.' };
+  if (!claveOk(req.nueva)) return { ok: false, error: 'La nueva contraseña debe tener al menos ' + MIN_CLAVE + ' caracteres.' };
+  fijaClave(db, est, String(req.nueva)); return sesion(db, est, now);
+}
+function sesion(db, est, now) {
+  var cursos = db.all('Cursos').map(cuFila), ints = db.all('Intentos').map(intFila).filter(function (i) { return codN(i.codigo) === codN(est.codigo); });
+  var lista = db.all('Examenes').map(exFila).filter(function (e) {
+    var cu = cursos.filter(function (c) { return c.id === e.cursoId; })[0];
+    return e.estado === 'publicado' && cu && mismoCurso(cu.nombre, est.curso);
+  }).map(function (e) {
     var mis = ints.filter(function (i) { return i.examenId === e.id; }), enCurso = mis.filter(function (i) { return i.estado === 'en curso' && i.deadline > now; })[0], ult = mis.filter(function (i) { return i.estado === 'enviado'; }).sort(function (x, y) { return y.fin - x.fin; })[0], v = ventana(e, now);
     return { id: e.id, titulo: e.titulo, descripcion: e.descripcion, duracion: e.duracion, inicio: e.inicio, fin: e.fin, ventana: v, intentos: e.intentos, usados: mis.length, enCurso: !!enCurso, puedeIniciar: !!enCurso || (v === 'abierto' && mis.length < e.intentos), ultimo: ult ? resumenInt(e, ult) : null, preguntas: e.preguntas.length };
   }).sort(function (x, y) { return (x.inicio || 0) - (y.inicio || 0); });
-  return { ok: true, now: now, estudiante: est, examenes: lista };
+  return { ok: true, now: now, token: tokenDe(est), estudiante: { codigo: est.codigo, nombre: est.nombre, curso: est.curso }, examenes: lista };
 }
 
-function iniciar(req, db, now) {
-  var est = buscarEst(db, req.cedula); if (!est) return { ok: false, error: 'Cédula no encontrada' };
+/* ----- estudiante: examen ----- */
+function iniciar(req, db, est, now) {
   cierraVencidos(db, now);
-  var ex = buscarEx(db, S(req.examenId), {});
-  if (!ex || ex.estado !== 'publicado' || !cursoOk(ex, est)) return { ok: false, error: 'Este examen no está disponible para ti' };
-  var mis = db.all('Intentos').map(intFila).filter(function (i) { return i.examenId === ex.id && cedN(i.cedula) === cedN(est.cedula); });
+  var ex = buscarEx(db, S(req.examenId), {}), cu = ex && cursoPorId(db, ex.cursoId);
+  if (!ex || ex.estado !== 'publicado' || !cu || !mismoCurso(cu.nombre, est.curso)) return { ok: false, error: 'Este examen no está disponible para ti' };
+  var mis = db.all('Intentos').map(intFila).filter(function (i) { return i.examenId === ex.id && codN(i.codigo) === codN(est.codigo); });
   var it = mis.filter(function (i) { return i.estado === 'en curso' && i.deadline > now; })[0];
   if (!it) {
     var v = ventana(ex, now);
@@ -219,15 +313,14 @@ function iniciar(req, db, now) {
     if (mis.length >= ex.intentos) return { ok: false, error: 'Ya usaste todos tus intentos' };
     var dl = ex.duracion > 0 ? now + ex.duracion * 60000 : (ex.fin || now + 3 * 3600000);
     if (ex.cortarEnFin && ex.fin) dl = Math.min(dl, ex.fin);
-    it = { id: nuevoId('i'), examenId: ex.id, cedula: est.cedula, nombre: est.nombre, curso: est.curso, inicio: now, deadline: dl, fin: 0, estado: 'en curso', respuestas: {}, puntajes: {}, puntaje: 0, total: 0, nota: 0, salidas: 0, pendientes: false, semilla: nuevoId('s') };
+    it = { id: nuevoId('i'), examenId: ex.id, codigo: est.codigo, nombre: est.nombre, curso: est.curso, inicio: now, deadline: dl, fin: 0, estado: 'en curso', respuestas: {}, puntajes: {}, puntaje: 0, total: 0, nota: 0, salidas: 0, pendientes: false, semilla: nuevoId('s') };
     db.upsert('Intentos', 'id', intAFila(it));
   }
   return { ok: true, now: now, intento: { id: it.id, inicio: it.inicio, deadline: it.deadline, respuestas: it.respuestas, salidas: it.salidas }, examen: paraEstudiante(ex, it) };
 }
-
-function guardarEnviar(req, db, now, final) {
+function guardarEnviar(req, db, est, now, final) {
   var it = db.all('Intentos').map(intFila).filter(function (i) { return i.id === S(req.intentoId); })[0];
-  if (!it || cedN(it.cedula) !== cedN(req.cedula)) return { ok: false, error: 'Intento no encontrado' };
+  if (!it || codN(it.codigo) !== codN(est.codigo)) return { ok: false, error: 'Intento no encontrado' };
   var ex = buscarEx(db, it.examenId, {}); if (!ex) return { ok: false, error: 'Examen no encontrado' };
   if (it.estado === 'enviado') return { ok: true, ya: true, resultado: resumenInt(ex, it) };
   if (now > it.deadline + GRACIA) { finaliza(db, it, ex, it.respuestas, it.deadline); return { ok: true, vencido: true, resultado: resumenInt(ex, it) }; }
@@ -238,17 +331,40 @@ function guardarEnviar(req, db, now, final) {
   return { ok: true, now: now, deadline: it.deadline };
 }
 
+/* ----- docente ----- */
 function admin(a, req, db, now) {
   var cache = {};
   if (a === 'adm_login') return { ok: true };
   if (a === 'adm_datos') {
     cierraVencidos(db, now);
-    var ints = db.all('Intentos').map(intFila), cnt = {};
-    ints.forEach(function (i) { var c = cnt[i.examenId] = cnt[i.examenId] || { enviados: 0, enCurso: 0 }; if (i.estado === 'enviado') c.enviados++; else c.enCurso++; });
-    return { ok: true, now: now, examenes: db.all('Examenes').map(exFila), estudiantes: db.all('Estudiantes').map(function (r) { return { cedula: S(r.cedula), nombre: S(r.nombre), curso: S(r.curso), correo: S(r.correo) }; }), conteo: cnt };
+    var cnt = {}, bn = {};
+    db.all('Intentos').map(intFila).forEach(function (i) { var c = cnt[i.examenId] = cnt[i.examenId] || { enviados: 0, enCurso: 0 }; if (i.estado === 'enviado') c.enviados++; else c.enCurso++; });
+    db.all('Banco').forEach(function (r) { bn[S(r.cursoId)] = (bn[S(r.cursoId)] || 0) + 1; });
+    return { ok: true, now: now, cursos: db.all('Cursos').map(cuFila), examenes: db.all('Examenes').map(exFila), estudiantes: db.all('Estudiantes').map(estFila).map(estPub), conteo: cnt, bancoN: bn };
+  }
+  if (a === 'adm_guardarCurso') {
+    var c = cuFila(req.curso || {}); if (!c.nombre) throw new Error('El curso necesita un nombre');
+    var todos = db.all('Cursos').map(cuFila);
+    if (todos.some(function (x) { return x.id !== c.id && x.nombre.toLowerCase() === c.nombre.toLowerCase(); })) throw new Error('Ya existe un curso con ese nombre');
+    var viejo = todos.filter(function (x) { return x.id === c.id; })[0];
+    if (!viejo) { c.id = nuevoId('c'); c.creado = now; }
+    else {
+      c.creado = viejo.creado;
+      if (viejo.nombre !== c.nombre) db.all('Estudiantes').map(estFila).forEach(function (e) { if (mismoCurso(e.curso, viejo.nombre)) { e.curso = c.nombre; db.upsert('Estudiantes', 'codigo', e); } });
+    }
+    db.upsert('Cursos', 'id', c); return { ok: true, id: c.id };
+  }
+  if (a === 'adm_eliminarCurso') {
+    var cu = cursoPorId(db, req.id); if (!cu) throw new Error('Curso no encontrado');
+    var ids = {}; db.all('Examenes').map(exFila).forEach(function (e) { if (e.cursoId === cu.id) { ids[e.id] = 1; db.remove('Examenes', 'id', e.id); } });
+    db.all('Intentos').map(intFila).forEach(function (i) { if (ids[i.examenId]) db.remove('Intentos', 'id', i.id); });
+    db.all('Banco').forEach(function (r) { if (S(r.cursoId) === cu.id) db.remove('Banco', 'id', S(r.id)); });
+    db.replaceAll('Estudiantes', db.all('Estudiantes').map(estFila).filter(function (e) { return !mismoCurso(e.curso, cu.nombre); }));
+    db.remove('Cursos', 'id', cu.id); return { ok: true };
   }
   if (a === 'adm_guardarExamen') {
     var e = exFila(req.examen || {}); if (!e.id) e.id = nuevoId('e');
+    if (!cursoPorId(db, e.cursoId)) throw new Error('El examen debe pertenecer a un curso');
     e.estado = e.estado === 'publicado' ? 'publicado' : 'borrador';
     validarExamen(e);
     if (e.inicio && e.fin && e.fin <= e.inicio) throw new Error('La fecha de cierre debe ser posterior a la de apertura');
@@ -265,29 +381,47 @@ function admin(a, req, db, now) {
   }
   if (a === 'adm_eliminarExamen') { db.remove('Examenes', 'id', S(req.id)); db.all('Intentos').map(intFila).forEach(function (i) { if (i.examenId === S(req.id)) db.remove('Intentos', 'id', i.id); }); return { ok: true }; }
   if (a === 'adm_estudiantes') {
-    var nuevos = {}, orden = [], base = [];
-    if (req.modo !== 'reemplazar') base = db.all('Estudiantes');
-    base.concat(req.lista || []).forEach(function (r) { var c = cedN(r.cedula); if (!c || !S(r.nombre)) return; if (!nuevos[c]) orden.push(c); nuevos[c] = { cedula: S(r.cedula), nombre: S(r.nombre), curso: S(r.curso), correo: S(r.correo) }; });
-    var filas = orden.map(function (c) { return nuevos[c]; });
-    db.replaceAll('Estudiantes', filas); return { ok: true, total: filas.length };
+    var cs = cursoPorId(db, req.cursoId); if (!cs) throw new Error('Curso no encontrado');
+    var actuales = db.all('Estudiantes').map(estFila), porCod = {}, nuevos = {}, orden = [], movidos = 0;
+    actuales.forEach(function (s) { porCod[codN(s.codigo)] = s; });
+    (req.lista || []).forEach(function (r) {
+      var k = codN(r.codigo); if (!k || !S(r.nombre)) return;
+      var ex2 = porCod[k], s = ex2 || { salt: '', hash: '', fallos: 0, bloqueo: 0 };
+      if (ex2 && ex2.curso && !mismoCurso(ex2.curso, cs.nombre)) movidos++;
+      s.codigo = S(r.codigo); s.nombre = S(r.nombre); s.correo = S(r.correo); s.curso = cs.nombre;
+      if (!nuevos[k]) orden.push(k); nuevos[k] = s;
+    });
+    var resto = actuales.filter(function (s) { return !nuevos[codN(s.codigo)] && !(req.modo === 'reemplazar' && mismoCurso(s.curso, cs.nombre)); });
+    db.replaceAll('Estudiantes', resto.concat(orden.map(function (k) { return nuevos[k]; })));
+    return { ok: true, total: orden.length, movidos: movidos };
   }
-  if (a === 'adm_eliminarEstudiante') { var cc = cedN(req.cedula); db.all('Estudiantes').forEach(function (r) { if (cedN(r.cedula) === cc) db.remove('Estudiantes', 'cedula', S(r.cedula)); }); return { ok: true }; }
+  if (a === 'adm_eliminarEstudiante') { var kk = codN(req.codigo); db.all('Estudiantes').forEach(function (r) { if (codN(r.codigo) === kk) db.remove('Estudiantes', 'codigo', S(r.codigo)); }); return { ok: true }; }
+  if (a === 'adm_resetClave') { var s2 = buscarEst(db, req.codigo); if (!s2) throw new Error('Estudiante no encontrado'); s2.salt = ''; s2.hash = ''; s2.fallos = 0; s2.bloqueo = 0; db.upsert('Estudiantes', 'codigo', s2); return { ok: true }; }
+  if (a === 'adm_banco') { return { ok: true, items: db.all('Banco').map(bcFila).filter(function (b) { return b.cursoId === S(req.cursoId); }).sort(function (x, y) { return y.actualizado - x.actualizado; }) }; }
+  if (a === 'adm_guardarPreguntas') {
+    if (!cursoPorId(db, req.cursoId)) throw new Error('Curso no encontrado');
+    var items = req.items || [], filas = [];
+    items.forEach(function (it, i) { var q = it.pregunta || {}; validarPregunta(q, (items.length > 1 ? 'Pregunta ' + (i + 1) + ': ' : ''), null); filas.push({ id: S(it.id) || nuevoId('b'), cursoId: S(req.cursoId), tipo: q.tipo, etiqueta: S(it.etiqueta), pregunta: q, actualizado: now }); });
+    filas.forEach(function (f) { db.upsert('Banco', 'id', bcAFila(f)); });
+    return { ok: true, n: filas.length };
+  }
+  if (a === 'adm_eliminarPreguntas') { (req.ids || []).forEach(function (id) { db.remove('Banco', 'id', S(id)); }); return { ok: true }; }
   if (a === 'adm_resultados') {
     cierraVencidos(db, now);
-    var ex = buscarEx(db, S(req.examenId), cache); if (!ex) throw new Error('Examen no encontrado');
-    var lis = db.all('Intentos').map(intFila).filter(function (i) { return i.examenId === ex.id; });
-    var ests = db.all('Estudiantes').map(function (r) { return { cedula: S(r.cedula), nombre: S(r.nombre), curso: S(r.curso), correo: S(r.correo) }; }).filter(function (s) { return cursoOk(ex, s); });
-    return { ok: true, examen: ex, intentos: lis, estudiantes: ests };
+    var ex3 = buscarEx(db, S(req.examenId), cache); if (!ex3) throw new Error('Examen no encontrado');
+    var cu3 = cursoPorId(db, ex3.cursoId), lis = db.all('Intentos').map(intFila).filter(function (i) { return i.examenId === ex3.id; });
+    var ests = db.all('Estudiantes').map(estFila).map(estPub).filter(function (s) { return cu3 && mismoCurso(s.curso, cu3.nombre); });
+    return { ok: true, examen: ex3, curso: cu3, intentos: lis, estudiantes: ests };
   }
   if (a === 'adm_calificar') {
-    var it = db.all('Intentos').map(intFila).filter(function (i) { return i.id === S(req.intentoId); })[0]; if (!it) throw new Error('Intento no encontrado');
-    var ex2 = buscarEx(db, it.examenId, cache); it.puntajes = it.puntajes || {};
-    it.puntajes[S(req.qid)] = Object.assign({}, it.puntajes[S(req.qid)], { manual: N(req.puntos) });
-    finaliza(db, it, ex2, it.respuestas, it.fin || now); return { ok: true, intento: it };
+    var it2 = db.all('Intentos').map(intFila).filter(function (i) { return i.id === S(req.intentoId); })[0]; if (!it2) throw new Error('Intento no encontrado');
+    var ex4 = buscarEx(db, it2.examenId, cache); it2.puntajes = it2.puntajes || {};
+    it2.puntajes[S(req.qid)] = Object.assign({}, it2.puntajes[S(req.qid)], { manual: N(req.puntos) });
+    finaliza(db, it2, ex4, it2.respuestas, it2.fin || now); return { ok: true, intento: it2 };
   }
   if (a === 'adm_recalcular') {
-    var ex3 = buscarEx(db, S(req.examenId), cache), n = 0; if (!ex3) throw new Error('Examen no encontrado');
-    db.all('Intentos').map(intFila).forEach(function (i) { if (i.examenId === ex3.id && i.estado === 'enviado') { finaliza(db, i, ex3, i.respuestas, i.fin); n++; } });
+    var ex5 = buscarEx(db, S(req.examenId), cache), n = 0; if (!ex5) throw new Error('Examen no encontrado');
+    db.all('Intentos').map(intFila).forEach(function (i) { if (i.examenId === ex5.id && i.estado === 'enviado') { finaliza(db, i, ex5, i.respuestas, i.fin); n++; } });
     return { ok: true, n: n };
   }
   if (a === 'adm_eliminarIntento') { db.remove('Intentos', 'id', S(req.intentoId)); return { ok: true }; }
@@ -311,22 +445,25 @@ var DEMODB = {
   replaceAll: function (n, rows) { this._s(n, rows); }
 };
 function sembrarDemo() {
-  if (DEMODB.all('Estudiantes').length) return;
-  DEMODB.replaceAll('Estudiantes', [
-    { cedula: '1001', nombre: 'Ana Perez Gomez', curso: 'Calculo Integral', correo: '' },
-    { cedula: '1002', nombre: 'Luis Martinez Ruiz', curso: 'Calculo Integral', correo: '' },
-    { cedula: '2001', nombre: 'Maria Diaz Torres', curso: 'Estadistica', correo: '' }]);
-  var ahora = Date.now();
-  DEMODB.upsert('Examenes', 'id', exAFila({ id: 'edemo1', titulo: 'Examen de muestra (todos los tipos)', curso: 'Calculo Integral', descripcion: 'Examen de ejemplo para probar la plataforma.', duracion: 20, inicio: ahora - 3600000, fin: ahora + 7 * 86400000, estado: 'publicado', aleatorio: true, mostrarNota: true, intentos: 3, cortarEnFin: true, actualizado: ahora, preguntas: [
-    { id: 'q1', tipo: 'mc', enunciado: 'Calcula $\\int_0^1 2x\\,dx$', opciones: ['$0$', '$1$', '$2$', '$\\tfrac12$'], correcta: 1, puntos: 1 },
-    { id: 'q2', tipo: 'vf', enunciado: 'La derivada de $\\sin x$ es $\\cos x$.', correcta: true, puntos: 1 },
-    { id: 'q3', tipo: 'num', enunciado: 'Valor de $\\int_0^{\\pi}\\sin x\\,dx$', correcta: '2', tolerancia: 0.01, puntos: 1 },
-    { id: 'q4', tipo: 'empareja', enunciado: 'Relaciona cada función con su derivada', pares: [['$x^2$', '$2x$'], ['$e^x$', '$e^x$'], ['$\\ln x$', '$1/x$']], puntos: 3 },
-    { id: 'q5', tipo: 'abierta', enunciado: 'Explica con tus palabras qué es una integral definida.', puntos: 2 }] }));
+  if (DEMODB.all('Cursos').length) return;
+  ['Cursos', 'Estudiantes', 'Examenes', 'Banco', 'Intentos'].forEach(function (n) { DEMODB.replaceAll(n, []); });
+  var ahora = Date.now(), cA = 'cdemo1', cB = 'cdemo2', est = function (c, n, cu) { return { codigo: c, nombre: n, curso: cu, correo: '', salt: '', hash: '', fallos: 0, bloqueo: 0 }; };
+  DEMODB.replaceAll('Cursos', [{ id: cA, nombre: 'Calculo Integral', descripcion: 'Curso de ejemplo', creado: ahora }, { id: cB, nombre: 'Estadistica', descripcion: '', creado: ahora }]);
+  DEMODB.replaceAll('Estudiantes', [est('1001', 'Ana Perez Gomez', 'Calculo Integral'), est('1002', 'Luis Martinez Ruiz', 'Calculo Integral'), est('2001', 'Maria Diaz Torres', 'Estadistica')]);
+  var P = [
+    { id: 'q1', tipo: 'mc', enunciado: 'Calcula $\\int_0^1 2x\\,dx$', opciones: ['$0$', '$1$', '$2$', '$\\tfrac12$'], correcta: 1, puntos: 1, _e: 'Integrales' },
+    { id: 'q2', tipo: 'vf', enunciado: 'La derivada de $\\sin x$ es $\\cos x$.', correcta: true, puntos: 1, _e: 'Derivadas' },
+    { id: 'q3', tipo: 'num', enunciado: 'Valor de $\\int_0^{\\pi}\\sin x\\,dx$', correcta: '2', tolerancia: 0.01, puntos: 1, _e: 'Integrales' },
+    { id: 'q4', tipo: 'empareja', enunciado: 'Relaciona cada función con su derivada', pares: [['$x^2$', '$2x$'], ['$e^x$', '$e^x$'], ['$\\ln x$', '$1/x$']], puntos: 3, _e: 'Derivadas' },
+    { id: 'q5', tipo: 'abierta', enunciado: 'Explica con tus palabras qué es una integral definida.', puntos: 2, _e: 'Teoría' },
+    { id: 'q6', tipo: 'mc', enunciado: '¿Cuál es $\\int x\\,dx$?', opciones: ['$x^2/2 + C$', '$x^2 + C$', '$2x + C$'], correcta: 0, puntos: 1, _e: 'Integrales' },
+    { id: 'q7', tipo: 'vf', enunciado: 'Toda función continua en $[a,b]$ es integrable.', correcta: true, puntos: 1, _e: 'Teoría' }];
+  P.forEach(function (q) { var e = q._e; delete q._e; DEMODB.upsert('Banco', 'id', bcAFila({ id: 'b' + q.id, cursoId: cA, tipo: q.tipo, etiqueta: e, pregunta: q, actualizado: ahora })); });
+  DEMODB.upsert('Examenes', 'id', exAFila({ id: 'edemo1', cursoId: cA, titulo: 'Examen de muestra (todos los tipos)', descripcion: 'Examen de ejemplo para probar la plataforma.', duracion: 20, inicio: ahora - 3600000, fin: ahora + 7 * 86400000, estado: 'publicado', aleatorio: true, mostrarNota: true, intentos: 3, cortarEnFin: true, actualizado: ahora, preguntas: P.slice(0, 5).map(function (q) { return Object.assign({}, q, { bancoId: 'b' + q.id }); }) }));
 }
 
 /* ===================== UTILIDADES ===================== */
-var ST = { vista: 'home', clave: '', est: null, lista: [], skew: 0, tab: 'examenes', datos: null, edit: null, res: null, modal: '', busy: false, ex: null, filtroEst: '', preview: null };
+var ST = { vista: 'home', lg: { paso: 'codigo', codigo: '' }, clave: '', est: null, token: '', lista: [], skew: 0, atab: 'cursos', ctab: 'sesiones', cursoId: '', datos: null, edit: null, res: null, modal: '', busy: false, ex: null, filtroEst: '', banco: [], bancoCurso: '', bcLoading: false, bf: { q: '', t: '', e: '' }, pick: null };
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function rich(t) {
   t = String(t == null ? '' : t); var out = '', last = 0, re = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g, m;
@@ -349,9 +486,11 @@ function $(id) { return document.getElementById(id); }
 function copia(o) { return JSON.parse(JSON.stringify(o)); }
 function idq() { return 'q' + Math.random().toString(36).slice(2, 8); }
 function estadoEx(e, now) { if (e.estado !== 'publicado') return ['Borrador', 'c-mu']; var v = ventana(e, now); return v === 'proximo' ? ['Programado', 'c-wa'] : v === 'cerrado' ? ['Cerrado', 'c-er'] : ['Abierto', 'c-ok']; }
+function rerender() { var a = document.activeElement, id = a && a.id, p = a && a.selectionStart; render(); if (id) { var b = $(id); if (b) { b.focus(); try { b.setSelectionRange(p, p); } catch (e) { } } } }
 async function api(action, data) {
   var req = Object.assign({ action: action }, data || {});
   if (action.indexOf('adm_') === 0) req.clave = ST.clave;
+  else if (ACC_EST.indexOf(action) >= 0 && ST.est) { req.codigo = ST.est.codigo; req.token = ST.token; }
   try {
     var res;
     if (DEMO) { await sleep(80); res = handle(copia(req), DEMODB, { now: Date.now(), clave: 'demo' }); }
@@ -360,13 +499,23 @@ async function api(action, data) {
     return res;
   } catch (e) { return { ok: false, error: 'No se pudo conectar con el servidor. Revisa tu internet o la URL del script.' }; }
 }
-async function llamar(action, data) { ST.busy = true; paintBusy(); var r = await api(action, data); ST.busy = false; paintBusy(); if (!r.ok) toast(r.error || 'Error', true); return r; }
+async function llamar(action, data) {
+  ST.busy = true; paintBusy(); var r = await api(action, data); ST.busy = false; paintBusy();
+  if (!r.ok) { toast(r.error || 'Error', true); if (r.sesion && ST.vista !== 'exam') cierraSesion(); }
+  return r;
+}
 function paintBusy() { var b = $('busy'); if (ST.busy && !b) { b = document.createElement('div'); b.id = 'busy'; b.className = 'busy'; b.textContent = 'Cargando…'; document.body.appendChild(b); } else if (!ST.busy && b) b.remove(); }
+function cierraSesion() { try { sessionStorage.removeItem('pe_sess'); } catch (e) { } if (ST.ex) { clearInterval(ST.ex.t1); clearInterval(ST.ex.t2); } ST.ex = null; ST.est = null; ST.token = ''; ST.vista = 'home'; ST.clave = ''; ST.datos = null; ST.edit = null; ST.res = null; ST.cursoId = ''; ST.modal = ''; ST.lg = { paso: 'codigo', codigo: '' }; render(); }
+function entra(r, guarda) {
+  ST.est = r.estudiante; ST.token = r.token; ST.lista = r.examenes; ST.vista = 'lista'; ST.modal = '';
+  if (guarda !== false) try { sessionStorage.setItem('pe_sess', JSON.stringify({ c: r.estudiante.codigo, t: r.token })); } catch (e) { }
+  render();
+}
 
 /* ===================== RENDER GENERAL ===================== */
 function render() {
   var h = '';
-  if (DEMO) h += '<div class="demo">MODO DEMO: los datos viven solo en este navegador. Clave de docente: <b>demo</b> · Cédulas de prueba: 1001, 1002</div>';
+  if (DEMO) h += '<div class="demo">MODO DEMO: los datos viven solo en este navegador. Clave de docente: <b>demo</b> · Códigos de estudiante de prueba: 1001, 1002 (la primera vez creas tu contraseña)</div>';
   if (ST.vista !== 'exam') {
     h += '<header class="top"><h1>Plataforma de Evaluaciones<small>Universidad de Cartagena</small></h1>';
     if (ST.vista !== 'home') h += '<button data-act="salir">Salir</button>';
@@ -377,13 +526,17 @@ function render() {
   if (ST.vista === 'exam') actualizaTimer();
 }
 function vHome() {
-  return '<main><div class="grid2"><div class="card"><h2>Soy estudiante</h2><p class="mu">Escribe tu número de cédula para ver tus exámenes.</p><label class="f">Cédula</label><input type="text" id="ced" inputmode="numeric" placeholder="Ej. 1045000000" autocomplete="off"><div style="margin-top:12px"><button class="pr" data-act="loginEst">Entrar</button></div></div>'
-    + '<div class="card"><h2>Soy docente</h2><p class="mu">Administra exámenes, estudiantes y resultados.</p><label class="f">Clave de docente</label><input type="password" id="clave" autocomplete="off"><div style="margin-top:12px"><button class="pr" data-act="loginDoc">Entrar</button></div></div></div></main>';
+  var lg = ST.lg, e;
+  if (lg.paso === 'codigo') e = '<p class="mu">Escribe tu código estudiantil (el que aparece en la lista del curso).</p><label class="f">Código estudiantil</label><input type="text" id="cod" autocomplete="off" placeholder="Ej. 2024010001"><div style="margin-top:12px"><button class="pr" data-act="lgContinuar">Continuar</button></div>';
+  else if (lg.paso === 'clave') e = '<p class="mu">Código: <b>' + esc(lg.codigo) + '</b></p><label class="f">Contraseña</label><input type="password" id="pw" autocomplete="current-password"><div class="row" style="margin-top:12px"><button class="pr" data-act="lgEntrar">Entrar</button><button data-act="lgAtras">Cambiar código</button></div><p class="mu">¿Olvidaste tu contraseña? Pide a tu docente que la restablezca.</p>';
+  else e = '<p>Es tu primer ingreso con el código <b>' + esc(lg.codigo) + '</b>. Crea una contraseña (mínimo ' + MIN_CLAVE + ' caracteres) para tus próximos ingresos.</p><label class="f">Nueva contraseña</label><input type="password" id="pw1" autocomplete="new-password"><label class="f">Repite la contraseña</label><input type="password" id="pw2" autocomplete="new-password"><div class="row" style="margin-top:12px"><button class="pr" data-act="lgCrear">Crear contraseña y entrar</button><button data-act="lgAtras">Cambiar código</button></div>';
+  return '<main><div class="grid2"><div class="card"><h2>Soy estudiante</h2>' + e + '</div>'
+    + '<div class="card"><h2>Soy docente</h2><p class="mu">Administra cursos, exámenes, banco de preguntas y resultados.</p><label class="f">Clave de docente</label><input type="password" id="clave" autocomplete="off"><div style="margin-top:12px"><button class="pr" data-act="loginDoc">Entrar</button></div></div></div></main>';
 }
 
 /* ===================== ESTUDIANTE ===================== */
 function vLista() {
-  var e = ST.est, h = '<main><div class="card"><h2>Hola, ' + esc(e.nombre) + '</h2><div class="mu">' + esc(e.curso) + ' · C.C. ' + esc(e.cedula) + '</div></div>';
+  var e = ST.est, h = '<main><div class="card"><div class="row sp"><div><h2 style="margin:0 0 4px">Hola, ' + esc(e.nombre) + '</h2><div class="mu">' + esc(e.curso) + ' · Código ' + esc(e.codigo) + '</div></div><button class="sm" data-act="modalClave">Cambiar contraseña</button></div></div>';
   if (!ST.lista.length) h += '<div class="card mu">No tienes exámenes publicados por ahora.</div>';
   ST.lista.forEach(function (x) {
     var chip = x.enCurso ? '<span class="chip c-in">En curso</span>' : x.ventana === 'proximo' ? '<span class="chip c-wa">Próximamente</span>' : x.ventana === 'cerrado' ? '<span class="chip c-er">Cerrado</span>' : '<span class="chip c-ok">Abierto</span>';
@@ -430,7 +583,7 @@ function vFin() {
   else h += '<p>Tus respuestas fueron registradas. El docente publicará los resultados.</p>';
   return h + '<button class="pr" data-act="verLista2">Volver a mis exámenes</button></div></main>';
 }
-async function cargarLista() { var r = await llamar('login', { cedula: ST.est.cedula }); if (r.ok) { ST.est = r.estudiante; ST.lista = r.examenes; } return r; }
+async function cargarLista() { var r = await llamar('lista'); if (r.ok) { ST.est = r.estudiante; ST.token = r.token; ST.lista = r.examenes; } return r; }
 function guardaLocal() { var ex = ST.ex; try { localStorage.setItem('pe_r_' + ex.intento.id, JSON.stringify({ r: ex.resp, s: ex.salidas })); } catch (e) { } ex.sucio = true; }
 function actualizaTimer() {
   var ex = ST.ex; if (!ex || ST.vista !== 'exam') return; var t = $('timer'); if (!t) return;
@@ -445,74 +598,108 @@ function registraSalida(motivo) {
 async function enviar(auto) {
   var ex = ST.ex; if (!ex || ex.enviando) return; ex.enviando = true; clearInterval(ex.t1); clearInterval(ex.t2);
   if (document.fullscreenElement) try { document.exitFullscreen(); } catch (e) { }
-  var r = await llamar('enviar', { cedula: ST.est.cedula, intentoId: ex.intento.id, respuestas: ex.resp, salidas: ex.salidas });
+  var r = await llamar('enviar', { intentoId: ex.intento.id, respuestas: ex.resp, salidas: ex.salidas });
   if (!r.ok) { ex.enviando = false; ex.t1 = setInterval(actualizaTimer, 500); toast('No se pudo enviar. Reintentando…', true); if (auto) setTimeout(function () { enviar(true); }, 4000); return; }
   try { localStorage.removeItem('pe_r_' + ex.intento.id); } catch (e) { }
   ST.fin = r.resultado || {}; ST.ex = null; ST.vista = 'fin'; ST.modal = ''; render();
 }
 
 /* ===================== DOCENTE ===================== */
+function tabsH(list, cur, act) { return '<div class="tabs">' + list.map(function (t) { return '<button data-act="' + act + '" data-t="' + t[0] + '" class="' + (cur === t[0] ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div>'; }
+function cursoActual() { return ST.datos.cursos.filter(function (c) { return c.id === ST.cursoId; })[0]; }
+function nomCurso(id) { var c = ST.datos.cursos.filter(function (x) { return x.id === id; })[0]; return c ? c.nombre : '(curso eliminado)'; }
 function vAdm() {
-  var tabs = [['examenes', 'Exámenes'], ['prog', 'Programación'], ['estud', 'Estudiantes'], ['res', 'Resultados']];
-  var h = '<main><div class="tabs">' + tabs.map(function (t) { return '<button data-act="tab" data-t="' + t[0] + '" class="' + (ST.tab === t[0] ? 'on' : '') + '">' + t[1] + '</button>'; }).join('') + '</div>';
+  var h = '<main>';
   if (!ST.datos) return h + '<div class="card mu">Cargando…</div></main>';
-  if (ST.edit) return h.replace(/<div class="tabs">[\s\S]*<\/div>/, '') + vEditor() + '</main>';
-  return h + ({ examenes: tExamenes, prog: tProg, estud: tEstud, res: tRes })[ST.tab]() + '</main>';
+  if (ST.edit) return h + vEditor() + '</main>';
+  if (!ST.cursoId) return h + tabsH([['cursos', 'Cursos'], ['prog', 'Programación']], ST.atab, 'tab') + (ST.atab === 'prog' ? tProg() : tCursos()) + '</main>';
+  var cu = cursoActual(); if (!cu) { ST.cursoId = ''; return vAdm(); }
+  h += '<div class="row" style="margin-bottom:8px"><button data-act="volverCursos">← Cursos</button><h2 style="margin:0">' + esc(cu.nombre) + '</h2></div>' + tabsH([['sesiones', 'Sesiones de examen'], ['banco', 'Banco de preguntas'], ['estud', 'Estudiantes'], ['res', 'Resultados']], ST.ctab, 'ctab');
+  return h + ({ sesiones: tSesiones, banco: tBanco, estud: tEstud, res: tRes })[ST.ctab](cu) + '</main>';
 }
-function tExamenes() {
-  var d = ST.datos, now = ahora(), h = '<div class="row sp" style="margin-bottom:12px"><h2 style="margin:0">Exámenes</h2><button class="pr" data-act="nuevoEx">+ Nuevo examen</button></div>';
-  if (!d.examenes.length) h += '<div class="card mu">Todavía no hay exámenes. Crea el primero.</div>';
-  d.examenes.slice().sort(function (a, b) { return b.actualizado - a.actualizado; }).forEach(function (e) {
+function tCursos() {
+  var d = ST.datos, h = '<div class="row sp" style="margin-bottom:12px"><h2 style="margin:0">Mis cursos</h2><button class="pr" data-act="nuevoCurso">+ Nuevo curso</button></div>';
+  if (!d.cursos.length) h += '<div class="card mu">Crea tu primer curso. Dentro de él tendrás sus estudiantes, sus sesiones de examen y su banco de preguntas.</div>';
+  d.cursos.slice().sort(function (a, b) { return a.nombre.localeCompare(b.nombre); }).forEach(function (c) {
+    var ne = d.examenes.filter(function (e) { return e.cursoId === c.id; }).length, ns = d.estudiantes.filter(function (s) { return mismoCurso(s.curso, c.nombre); }).length;
+    h += '<div class="card"><div class="row sp"><h3 style="margin:0">' + esc(c.nombre) + '</h3><div class="row"><button class="pr sm" data-act="abrirCurso" data-id="' + esc(c.id) + '">Abrir</button><button class="sm" data-act="editCurso" data-id="' + esc(c.id) + '">Editar</button><button class="sm dg" data-act="delCurso" data-id="' + esc(c.id) + '">Eliminar</button></div></div>' + (c.descripcion ? '<div class="mu">' + esc(c.descripcion) + '</div>' : '') + '<div class="mu" style="margin-top:4px">' + ne + ' sesiones de examen · ' + ns + ' estudiantes · ' + (d.bancoN[c.id] || 0) + ' preguntas en el banco</div></div>';
+  });
+  return h;
+}
+function tSesiones(cu) {
+  var d = ST.datos, now = ahora(), l = d.examenes.filter(function (e) { return e.cursoId === cu.id; }), h = '<div class="row sp" style="margin-bottom:12px"><h3 style="margin:0">Sesiones de examen</h3><button class="pr" data-act="nuevoEx">+ Nueva sesión de examen</button></div>';
+  if (!l.length) h += '<div class="card mu">Este curso aún no tiene sesiones. Crea la primera; puedes armarla con preguntas del banco.</div>';
+  l.sort(function (a, b) { return b.actualizado - a.actualizado; }).forEach(function (e) {
     var st = estadoEx(e, now), c = d.conteo[e.id] || { enviados: 0, enCurso: 0 }, pts = e.preguntas.reduce(function (s, q) { return s + (Number(q.puntos) || 1); }, 0);
-    h += '<div class="card"><div class="row sp"><h3 style="margin:0">' + esc(e.titulo) + '</h3><span class="chip ' + st[1] + '">' + st[0] + '</span></div><div class="mu">' + esc(e.curso || 'Todos los cursos') + ' · ' + e.preguntas.length + ' preguntas · ' + pts + ' pts · ' + (e.duracion ? e.duracion + ' min' : 'sin límite') + ' · ' + c.enviados + ' enviados' + (c.enCurso ? ', ' + c.enCurso + ' en curso' : '') + '</div><div class="mu">Abre: ' + fechaTxt(e.inicio) + ' · Cierra: ' + fechaTxt(e.fin) + '</div>'
+    h += '<div class="card"><div class="row sp"><h3 style="margin:0">' + esc(e.titulo) + '</h3><span class="chip ' + st[1] + '">' + st[0] + '</span></div><div class="mu">' + e.preguntas.length + ' preguntas · ' + pts + ' pts · ' + (e.duracion ? e.duracion + ' min' : 'sin límite') + ' · ' + c.enviados + ' enviados' + (c.enCurso ? ', ' + c.enCurso + ' en curso' : '') + '</div><div class="mu">Abre: ' + fechaTxt(e.inicio) + ' · Cierra: ' + fechaTxt(e.fin) + '</div>'
       + '<div class="row" style="margin-top:8px"><button class="sm" data-act="editEx" data-id="' + esc(e.id) + '">Editar</button><button class="sm" data-act="dupEx" data-id="' + esc(e.id) + '">Duplicar</button><button class="sm" data-act="togEx" data-id="' + esc(e.id) + '">' + (e.estado === 'publicado' ? 'Pasar a borrador' : 'Publicar') + '</button><button class="sm" data-act="resEx" data-id="' + esc(e.id) + '">Resultados</button><button class="sm dg" data-act="delEx" data-id="' + esc(e.id) + '">Eliminar</button></div></div>';
   });
   return h;
 }
 function tProg() {
   var d = ST.datos, now = ahora(), l = d.examenes.slice().sort(function (a, b) { return (a.inicio || 9e15) - (b.inicio || 9e15); });
-  var h = '<h2 style="margin-top:0">Programación de evaluaciones</h2><p class="mu">Los estudiantes pueden comenzar entre la apertura y el cierre; el tiempo corre desde que empiezan (y se corta al cierre si así lo marcaste).</p><div class="card" style="overflow:auto"><table><tr><th>Examen</th><th>Curso</th><th>Apertura</th><th>Cierre</th><th>Min</th><th>Estado</th><th></th></tr>';
-  l.forEach(function (e) { var st = estadoEx(e, now); h += '<tr><td>' + esc(e.titulo) + '</td><td>' + esc(e.curso || 'Todos') + '</td><td>' + fechaTxt(e.inicio) + '</td><td>' + fechaTxt(e.fin) + '</td><td>' + (e.duracion || '—') + '</td><td><span class="chip ' + st[1] + '">' + st[0] + '</span></td><td><button class="sm" data-act="fechas" data-id="' + esc(e.id) + '">Programar</button></td></tr>'; });
-  return h + '</table>' + (l.length ? '' : '<p class="mu">Sin exámenes.</p>') + '</div>';
+  var h = '<h2 style="margin-top:0">Programación de evaluaciones</h2><p class="mu">Los estudiantes pueden comenzar entre la apertura y el cierre; el tiempo corre desde que empiezan (y se corta al cierre si así lo marcaste).</p><div class="card" style="overflow:auto"><table><tr><th>Sesión</th><th>Curso</th><th>Apertura</th><th>Cierre</th><th>Min</th><th>Estado</th><th></th></tr>';
+  l.forEach(function (e) { var st = estadoEx(e, now); h += '<tr><td>' + esc(e.titulo) + '</td><td>' + esc(nomCurso(e.cursoId)) + '</td><td>' + fechaTxt(e.inicio) + '</td><td>' + fechaTxt(e.fin) + '</td><td>' + (e.duracion || '—') + '</td><td><span class="chip ' + st[1] + '">' + st[0] + '</span></td><td><button class="sm" data-act="fechas" data-id="' + esc(e.id) + '">Programar</button></td></tr>'; });
+  return h + '</table>' + (l.length ? '' : '<p class="mu">Sin sesiones.</p>') + '</div>';
 }
-function tEstud() {
-  var d = ST.datos, q = ST.filtroEst.toLowerCase(), cursos = {};
-  d.estudiantes.forEach(function (s) { cursos[s.curso || '(sin curso)'] = (cursos[s.curso || '(sin curso)'] || 0) + 1; });
-  var l = d.estudiantes.filter(function (s) { return !q || (s.nombre + s.cedula + s.curso).toLowerCase().indexOf(q) >= 0; });
-  var h = '<h2 style="margin-top:0">Estudiantes (' + d.estudiantes.length + ')</h2><div class="card"><h3>Cargar lista desde Excel o CSV</h3><p class="mu">Columnas: cédula, nombre, curso, correo (con o sin títulos). El curso debe coincidir con el curso del examen.</p><div class="row"><input type="file" id="fileEst" accept=".xlsx,.xls,.csv" style="width:auto"><button class="sm" data-act="plantilla">Descargar plantilla</button></div><div id="prevEst"></div></div>';
-  h += '<div class="card"><h3>Agregar uno</h3><div class="row"><input type="text" id="nc" placeholder="Cédula" style="flex:1;min-width:120px"><input type="text" id="nn" placeholder="Nombre completo" style="flex:2;min-width:160px"><input type="text" id="ncu" placeholder="Curso" style="flex:1;min-width:120px" list="cursos"><button class="pr" data-act="addEst">Agregar</button></div><datalist id="cursos">' + Object.keys(cursos).map(function (c) { return '<option value="' + esc(c) + '">'; }).join('') + '</datalist></div>';
-  h += '<div class="card"><div class="row sp"><div class="mu">' + Object.keys(cursos).map(function (c) { return esc(c) + ': <b>' + cursos[c] + '</b>'; }).join(' · ') + '</div><input type="search" id="bEst" placeholder="Buscar…" value="' + esc(ST.filtroEst) + '" style="max-width:240px"></div><div style="overflow:auto;max-height:420px;margin-top:8px"><table><tr><th>Cédula</th><th>Nombre</th><th>Curso</th><th></th></tr>' + l.slice(0, 400).map(function (s) { return '<tr><td>' + esc(s.cedula) + '</td><td>' + esc(s.nombre) + '</td><td>' + esc(s.curso) + '</td><td><button class="sm dg" data-act="delEst" data-c="' + esc(s.cedula) + '">✕</button></td></tr>'; }).join('') + '</table></div></div>';
+function tEstud(cu) {
+  var d = ST.datos, q = ST.filtroEst.toLowerCase(), todos = d.estudiantes.filter(function (s) { return mismoCurso(s.curso, cu.nombre); });
+  var l = todos.filter(function (s) { return !q || (s.nombre + s.codigo).toLowerCase().indexOf(q) >= 0; }), conPass = todos.filter(function (s) { return s.tienePass; }).length;
+  var h = '<h3 style="margin-top:0">Estudiantes de ' + esc(cu.nombre) + ' (' + todos.length + ')</h3><div class="card"><h3>Cargar lista desde Excel o CSV</h3><p class="mu">Columnas: <b>código estudiantil</b>, nombre, correo (con o sin títulos). Quienes ya existen conservan su contraseña.</p><div class="row"><input type="file" id="fileEst" accept=".xlsx,.xls,.csv" style="width:auto"><button class="sm" data-act="plantilla">Descargar plantilla</button></div><div id="prevEst"></div></div>';
+  h += '<div class="card"><h3>Agregar uno</h3><div class="row"><input type="text" id="nc" placeholder="Código estudiantil" style="flex:1;min-width:140px"><input type="text" id="nn" placeholder="Nombre completo" style="flex:2;min-width:160px"><button class="pr" data-act="addEst">Agregar</button></div></div>';
+  h += '<div class="card"><div class="row sp"><div class="mu">Con contraseña creada: <b>' + conPass + '</b> de ' + todos.length + '</div><input type="search" id="bEst" data-rf="1" placeholder="Buscar…" value="' + esc(ST.filtroEst) + '" style="max-width:240px"></div><div style="overflow:auto;max-height:440px;margin-top:8px"><table><tr><th>Código</th><th>Nombre</th><th>Contraseña</th><th></th></tr>' + l.slice(0, 400).map(function (s) { return '<tr><td>' + esc(s.codigo) + '</td><td>' + esc(s.nombre) + '</td><td>' + (s.tienePass ? '<span class="chip c-ok">Creada</span>' : '<span class="chip c-mu">Pendiente</span>') + '</td><td><div class="row">' + (s.tienePass ? '<button class="sm" data-act="resetEst" data-c="' + esc(s.codigo) + '">Restablecer</button>' : '') + '<button class="sm dg" data-act="delEst" data-c="' + esc(s.codigo) + '">✕</button></div></td></tr>'; }).join('') + '</table></div></div>';
   return h;
 }
-function tRes() {
-  var d = ST.datos, r = ST.res, h = '<h2 style="margin-top:0">Resultados</h2><div class="card"><div class="row"><select id="selRes" style="flex:1;min-width:220px"><option value="">— elige un examen —</option>' + d.examenes.map(function (e) { return '<option value="' + esc(e.id) + '"' + (r && r.examen.id === e.id ? ' selected' : '') + '>' + esc(e.titulo) + '</option>'; }).join('') + '</select><button data-act="cargaRes">Ver</button></div></div>';
-  if (!r) return h;
+function bancoFiltrado(l, f) { var q = (f.q || '').toLowerCase(); return l.filter(function (b) { return (!f.t || b.tipo === f.t) && (!f.e || b.etiqueta === f.e) && (!q || (plain(b.pregunta.enunciado) + ' ' + b.etiqueta).toLowerCase().indexOf(q) >= 0); }); }
+function etiquetasHtml(l, sel) { var et = {}; l.forEach(function (b) { if (b.etiqueta) et[b.etiqueta] = 1; }); return '<option value="">Todas las etiquetas</option>' + Object.keys(et).sort().map(function (e) { return '<option value="' + esc(e) + '"' + (sel === e ? ' selected' : '') + '>' + esc(e) + '</option>'; }).join(''); }
+function tipoOpts(sel) { return '<option value="">Todos los tipos</option>' + Object.keys(NOMT).map(function (t) { return '<option value="' + t + '"' + (sel === t ? ' selected' : '') + '>' + NOMT[t] + '</option>'; }).join(''); }
+async function cargaBanco(id) { ST.bcLoading = true; var r = await llamar('adm_banco', { cursoId: id }); ST.banco = r.ok ? r.items : []; ST.bancoCurso = id; ST.bcLoading = false; render(); }
+function tBanco(cu) {
+  if (ST.bancoCurso !== cu.id) { if (!ST.bcLoading) cargaBanco(cu.id); return '<div class="card mu">Cargando banco…</div>'; }
+  var vis = bancoFiltrado(ST.banco, ST.bf), h = '<div class="row sp" style="margin-bottom:10px"><h3 style="margin:0">Banco de preguntas (' + ST.banco.length + ')</h3><div class="row"><span class="mu">Nueva:</span>' + Object.keys(NOMT).map(function (t) { return '<button class="sm" data-act="nuevaPB" data-t="' + t + '">+ ' + NOMT[t].split(' (')[0] + '</button>'; }).join('') + '</div></div>';
+  h += '<div class="card"><div class="row"><input type="search" id="bfq" data-rf="1" data-bf="q" placeholder="Buscar en el banco…" value="' + esc(ST.bf.q) + '" style="flex:2;min-width:160px"><select id="bft" data-bf="t" style="flex:1;min-width:130px">' + tipoOpts(ST.bf.t) + '</select><select id="bfe" data-bf="e" style="flex:1;min-width:130px">' + etiquetasHtml(ST.banco, ST.bf.e) + '</select></div></div>';
+  if (!ST.banco.length) h += '<div class="card mu">El banco de este curso está vacío. Crea preguntas aquí, o guarda en el banco las de un examen con el botón "Al banco".</div>';
+  else if (!vis.length) h += '<div class="card mu">Ninguna pregunta coincide con el filtro.</div>';
+  vis.slice(0, 100).forEach(function (b) {
+    h += '<div class="qcard"><div class="row sp"><div class="row"><span class="chip c-in">' + NOMT[b.tipo] + '</span>' + (b.etiqueta ? '<span class="chip c-mu">' + esc(b.etiqueta) + '</span>' : '') + '<span class="mu">' + b.pregunta.puntos + ' pts</span></div><div class="row"><button class="sm" data-act="editPB" data-id="' + esc(b.id) + '">Editar</button><button class="sm dg" data-act="delPB" data-id="' + esc(b.id) + '">Eliminar</button></div></div><div style="margin-top:6px">' + rich(b.pregunta.enunciado) + '</div></div>';
+  });
+  if (vis.length > 100) h += '<p class="mu">Mostrando 100 de ' + vis.length + '. Usa el filtro para acotar.</p>';
+  return h;
+}
+function tRes(cu) {
+  var d = ST.datos, r = ST.res, lst = d.examenes.filter(function (e) { return e.cursoId === cu.id; }), h = '<div class="card"><div class="row"><select id="selRes" style="flex:1;min-width:220px"><option value="">— elige una sesión —</option>' + lst.map(function (e) { return '<option value="' + esc(e.id) + '"' + (r && r.examen.id === e.id ? ' selected' : '') + '>' + esc(e.titulo) + '</option>'; }).join('') + '</select><button data-act="cargaRes">Ver</button></div></div>';
+  if (!r || r.examen.cursoId !== cu.id) return h;
   var env = r.intentos.filter(function (i) { return i.estado === 'enviado'; }), notas = env.map(function (i) { return i.nota; }), prom = notas.length ? notas.reduce(function (a, b) { return a + b; }, 0) / notas.length : 0, pres = {};
-  r.intentos.forEach(function (i) { pres[cedKey(i.cedula)] = 1; });
-  var faltan = r.estudiantes.filter(function (s) { return !pres[cedKey(s.cedula)]; });
+  r.intentos.forEach(function (i) { pres[codN(i.codigo)] = 1; });
+  var faltan = r.estudiantes.filter(function (s) { return !pres[codN(s.codigo)]; });
   h += '<div class="card"><div class="row sp"><div><b>' + esc(r.examen.titulo) + '</b><div class="mu">Enviados: ' + env.length + ' de ' + r.estudiantes.length + ' · Promedio: <b>' + prom.toFixed(2) + '</b>' + (notas.length ? ' · Máx ' + Math.max.apply(null, notas).toFixed(1) + ' · Mín ' + Math.min.apply(null, notas).toFixed(1) : '') + ' · Aprobaron (≥ 3.0): ' + notas.filter(function (n) { return n >= 3; }).length + '</div></div><div class="row"><button class="sm" data-act="cargaRes">Actualizar</button><button class="sm" data-act="recalc">Recalcular notas</button><button class="pr sm" data-act="excel">Exportar a Excel</button></div></div></div>';
-  h += '<div class="card" style="overflow:auto"><table><tr><th>Cédula</th><th>Nombre</th><th>Estado</th><th>Puntaje</th><th>Nota</th><th>Salidas</th></tr>';
-  r.intentos.slice().sort(function (a, b) { return a.nombre.localeCompare(b.nombre); }).forEach(function (i) { h += '<tr class="cl" data-act="detInt" data-id="' + esc(i.id) + '"><td>' + esc(i.cedula) + '</td><td>' + esc(i.nombre) + '</td><td>' + (i.estado === 'enviado' ? '<span class="chip c-ok">Enviado</span>' : '<span class="chip c-in">En curso</span>') + (i.pendientes ? ' <span class="chip c-wa">Por calificar</span>' : '') + '</td><td>' + (i.estado === 'enviado' ? i.puntaje + ' / ' + i.total : '—') + '</td><td><b>' + (i.estado === 'enviado' ? i.nota.toFixed(1) : '—') + '</b></td><td>' + (i.salidas ? '<span class="chip c-er">' + i.salidas + '</span>' : '0') + '</td></tr>'; });
+  h += '<div class="card" style="overflow:auto"><table><tr><th>Código</th><th>Nombre</th><th>Estado</th><th>Puntaje</th><th>Nota</th><th>Salidas</th></tr>';
+  r.intentos.slice().sort(function (a, b) { return a.nombre.localeCompare(b.nombre); }).forEach(function (i) { h += '<tr class="cl" data-act="detInt" data-id="' + esc(i.id) + '"><td>' + esc(i.codigo) + '</td><td>' + esc(i.nombre) + '</td><td>' + (i.estado === 'enviado' ? '<span class="chip c-ok">Enviado</span>' : '<span class="chip c-in">En curso</span>') + (i.pendientes ? ' <span class="chip c-wa">Por calificar</span>' : '') + '</td><td>' + (i.estado === 'enviado' ? i.puntaje + ' / ' + i.total : '—') + '</td><td><b>' + (i.estado === 'enviado' ? i.nota.toFixed(1) : '—') + '</b></td><td>' + (i.salidas ? '<span class="chip c-er">' + i.salidas + '</span>' : '0') + '</td></tr>'; });
   h += '</table>' + (r.intentos.length ? '' : '<p class="mu">Nadie ha presentado aún.</p>') + '</div>';
   if (faltan.length) h += '<div class="card"><b>No han presentado (' + faltan.length + ')</b><div class="mu">' + faltan.map(function (s) { return esc(s.nombre); }).join(' · ') + '</div></div>';
   return h;
 }
-function cedKey(c) { return cedN(c); }
 function vEditor() {
-  var E = ST.edit, h = '<div class="row sp"><h2 style="margin:0">' + (E.id ? 'Editar examen' : 'Nuevo examen') + '</h2><div class="row"><button data-act="cancelEd">Cancelar</button><button class="pr" data-act="guardaEd">Guardar examen</button></div></div>';
-  var cursos = {}; ST.datos.estudiantes.forEach(function (s) { if (s.curso) cursos[s.curso] = 1; });
-  h += '<div class="card"><label class="f">Título</label><input type="text" data-m="f:titulo" value="' + esc(E.titulo) + '"><div class="grid2"><div><label class="f">Curso (vacío = todos)</label><input type="text" list="cl2" data-m="f:curso" value="' + esc(E.curso) + '"><datalist id="cl2">' + Object.keys(cursos).map(function (c) { return '<option value="' + esc(c) + '">'; }).join('') + '</datalist></div><div><label class="f">Duración (minutos, 0 = sin límite)</label><input type="number" min="0" data-m="f:duracion" value="' + E.duracion + '"></div><div><label class="f">Apertura</label><input type="datetime-local" data-m="f:inicio" value="' + aLocalInput(E.inicio) + '"></div><div><label class="f">Cierre</label><input type="datetime-local" data-m="f:fin" value="' + aLocalInput(E.fin) + '"></div><div><label class="f">Intentos permitidos</label><input type="number" min="1" data-m="f:intentos" value="' + E.intentos + '"></div></div>'
+  var E = ST.edit; if (E.kind === 'banco') return vEditorBanco();
+  var h = '<div class="row sp"><div><h2 style="margin:0">' + (E.id ? 'Editar sesión de examen' : 'Nueva sesión de examen') + '</h2><div class="mu">Curso: <b>' + esc(nomCurso(E.cursoId)) + '</b></div></div><div class="row"><button data-act="cancelEd">Cancelar</button><button class="pr" data-act="guardaEd">Guardar</button></div></div>';
+  h += '<div class="card"><label class="f">Título</label><input type="text" data-m="f:titulo" value="' + esc(E.titulo) + '"><div class="grid2"><div><label class="f">Duración (minutos, 0 = sin límite)</label><input type="number" min="0" data-m="f:duracion" value="' + E.duracion + '"></div><div><label class="f">Intentos permitidos</label><input type="number" min="1" data-m="f:intentos" value="' + E.intentos + '"></div><div><label class="f">Apertura</label><input type="datetime-local" data-m="f:inicio" value="' + aLocalInput(E.inicio) + '"></div><div><label class="f">Cierre</label><input type="datetime-local" data-m="f:fin" value="' + aLocalInput(E.fin) + '"></div></div>'
     + '<label class="f">Descripción / instrucciones</label><textarea data-m="f:descripcion">' + esc(E.descripcion) + '</textarea>'
     + '<div class="row" style="margin-top:8px"><label><input type="checkbox" data-m="f:aleatorio"' + (E.aleatorio ? ' checked' : '') + '> Orden aleatorio de preguntas y opciones</label><label><input type="checkbox" data-m="f:mostrarNota"' + (E.mostrarNota ? ' checked' : '') + '> Mostrar la nota al estudiante al terminar</label><label><input type="checkbox" data-m="f:cortarEnFin"' + (E.cortarEnFin ? ' checked' : '') + '> Cortar el tiempo a la hora de cierre</label><label><input type="checkbox" data-m="f:publicado"' + (E.estado === 'publicado' ? ' checked' : '') + '> <b>Publicado</b> (visible para estudiantes)</label></div></div>';
   var pts = E.preguntas.reduce(function (s, q) { return s + (Number(q.puntos) || 0); }, 0);
   h += '<div class="row sp"><h3 style="margin:6px 0">Preguntas (' + E.preguntas.length + ' · ' + pts + ' pts)</h3><span class="mu">Fórmulas con LaTeX: $x^2$ en línea, $$\\int_0^1 x\\,dx$$ en bloque</span></div>';
-  E.preguntas.forEach(function (q, i) { h += vQ(q, i); });
-  h += '<div class="card"><b>Agregar pregunta:</b> <div class="row" style="margin-top:6px"><button data-act="addQ" data-t="mc">Opción múltiple</button><button data-act="addQ" data-t="vf">Verdadero/Falso</button><button data-act="addQ" data-t="num">Numérica</button><button data-act="addQ" data-t="empareja">Emparejamiento</button><button data-act="addQ" data-t="abierta">Abierta</button></div></div>';
-  return h + '<div class="row" style="justify-content:flex-end"><button data-act="cancelEd">Cancelar</button><button class="pr" data-act="guardaEd">Guardar examen</button></div>';
+  E.preguntas.forEach(function (q, i) { h += vQ(q, i, false); });
+  h += '<div class="card"><b>Agregar pregunta:</b> <div class="row" style="margin-top:6px"><button class="pr" data-act="abrePick">➕ Desde el banco del curso (' + (ST.datos.bancoN[E.cursoId] || 0) + ')</button><button data-act="addQ" data-t="mc">Opción múltiple</button><button data-act="addQ" data-t="vf">Verdadero/Falso</button><button data-act="addQ" data-t="num">Numérica</button><button data-act="addQ" data-t="empareja">Emparejamiento</button><button data-act="addQ" data-t="abierta">Abierta</button></div></div>';
+  return h + '<div class="row" style="justify-content:flex-end"><button data-act="cancelEd">Cancelar</button><button class="pr" data-act="guardaEd">Guardar</button></div>';
+}
+function vEditorBanco() {
+  var E = ST.edit, et = {}; ST.banco.forEach(function (b) { if (b.etiqueta) et[b.etiqueta] = 1; });
+  return '<div class="row sp"><div><h2 style="margin:0">' + (E.id ? 'Editar pregunta del banco' : 'Nueva pregunta del banco') + '</h2><div class="mu">Curso: <b>' + esc(nomCurso(E.cursoId)) + '</b></div></div><div class="row"><button data-act="cancelEd">Cancelar</button><button class="pr" data-act="guardaEd">Guardar en el banco</button></div></div>'
+    + '<div class="card"><label class="f">Tema o etiqueta (para filtrar luego; opcional)</label><input type="text" list="etq" data-m="f:etiqueta" value="' + esc(E.etiqueta) + '"><datalist id="etq">' + Object.keys(et).map(function (e) { return '<option value="' + esc(e) + '">'; }).join('') + '</datalist></div>' + vQ(E.preguntas[0], 0, true)
+    + '<div class="row" style="justify-content:flex-end"><button data-act="cancelEd">Cancelar</button><button class="pr" data-act="guardaEd">Guardar en el banco</button></div>';
 }
 var NOMT = { mc: 'Opción múltiple', vf: 'Verdadero/Falso', num: 'Numérica', abierta: 'Abierta (calificas tú)', empareja: 'Emparejamiento' };
-function vQ(q, i) {
-  var h = '<div class="qcard"><div class="qh"><b>' + (i + 1) + '.</b><span class="chip c-in">' + NOMT[q.tipo] + '</span><span style="flex:1"></span><label class="mu">Puntos <input type="number" min="0" step="0.5" style="width:70px;display:inline-block" data-m="q:' + i + ':puntos" value="' + q.puntos + '"></label><button class="sm" data-act="mvQ" data-i="' + i + '" data-d="-1">↑</button><button class="sm" data-act="mvQ" data-i="' + i + '" data-d="1">↓</button><button class="sm" data-act="dupQ" data-i="' + i + '">Duplicar</button><button class="sm dg" data-act="delQ" data-i="' + i + '">✕</button></div>';
+function vQ(q, i, bk) {
+  var h = '<div class="qcard"><div class="qh"><b>' + (bk ? '' : (i + 1) + '.') + '</b><span class="chip c-in">' + NOMT[q.tipo] + '</span><span style="flex:1"></span><label class="mu">Puntos <input type="number" min="0" step="0.5" style="width:70px;display:inline-block" data-m="q:' + i + ':puntos" value="' + q.puntos + '"></label>' + (bk ? '' : '<button class="sm" data-act="alBanco" data-i="' + i + '">Al banco</button><button class="sm" data-act="mvQ" data-i="' + i + '" data-d="-1">↑</button><button class="sm" data-act="mvQ" data-i="' + i + '" data-d="1">↓</button><button class="sm" data-act="dupQ" data-i="' + i + '">Duplicar</button><button class="sm dg" data-act="delQ" data-i="' + i + '">✕</button>') + '</div>';
   h += '<textarea data-m="q:' + i + ':enunciado" data-pv="pv-q' + i + '" placeholder="Enunciado de la pregunta">' + esc(q.enunciado) + '</textarea><div class="pv" id="pv-q' + i + '">' + rich(q.enunciado) + '</div>';
   h += '<label class="f">Imagen (enlace opcional https://…)</label><input type="text" data-m="q:' + i + ':imagen" value="' + esc(q.imagen || '') + '">';
   if (q.tipo === 'mc') {
@@ -537,7 +724,22 @@ function qNueva(t) {
   if (t === 'mc') { b.opciones = ['', '', '', '']; b.correcta = 0; } else if (t === 'vf') b.correcta = true; else if (t === 'num') { b.correcta = ''; b.tolerancia = 0; } else if (t === 'empareja') b.pares = [['', ''], ['', ''], ['', '']]; else if (t === 'abierta') b.rubrica = '';
   return b;
 }
-function exNuevo() { return { id: '', titulo: '', curso: '', descripcion: '', duracion: 60, inicio: 0, fin: 0, estado: 'borrador', aleatorio: true, mostrarNota: true, intentos: 1, cortarEnFin: true, preguntas: [qNueva('mc')] }; }
+function exNuevo(cursoId) { return { id: '', cursoId: cursoId, titulo: '', descripcion: '', duracion: 60, inicio: 0, fin: 0, estado: 'borrador', aleatorio: true, mostrarNota: true, intentos: 1, cortarEnFin: true, preguntas: [] }; }
+
+/* ----- selector del banco ----- */
+function pickLista() { return bancoFiltrado(ST.banco, ST.pick); }
+function modalPick() {
+  var p = ST.pick, l = pickLista(), n = Object.keys(p.sel).filter(function (k) { return p.sel[k]; }).length;
+  return '<div class="row sp"><h3 style="margin:0">Agregar desde el banco</h3><button data-act="cerrarModal">Cerrar</button></div>'
+    + '<div class="row" style="margin:8px 0"><input type="search" id="pkq" data-pk="q" placeholder="Buscar…" value="' + esc(p.q) + '" style="flex:2;min-width:140px"><select id="pkt" data-pk="t" style="flex:1;min-width:120px">' + tipoOpts(p.t) + '</select><select id="pke" data-pk="e" style="flex:1;min-width:120px">' + etiquetasHtml(ST.banco, p.e) + '</select></div>'
+    + '<div style="max-height:380px;overflow:auto;border:1px solid var(--bd);border-radius:8px">' + (l.length ? l.slice(0, 150).map(function (b) { return '<label class="pickrow"><input type="checkbox" data-pick="' + esc(b.id) + '"' + (p.sel[b.id] ? ' checked' : '') + '><div><span class="chip c-in">' + NOMT[b.tipo] + '</span> ' + (b.etiqueta ? '<span class="chip c-mu">' + esc(b.etiqueta) + '</span> ' : '') + '<span class="mu">' + b.pregunta.puntos + ' pts</span><div>' + rich(b.pregunta.enunciado) + '</div></div></label>'; }).join('') : '<p class="mu" style="padding:10px">No hay preguntas con ese filtro.</p>') + '</div>'
+    + '<div class="row sp" style="margin-top:10px"><button class="pr" data-act="pickAdd"' + (n ? '' : ' disabled') + '>Agregar seleccionadas (' + n + ')</button><div class="row"><span class="mu">o al azar:</span><input type="number" id="pkn" data-pk="n" min="1" value="' + p.n + '" style="width:70px"><button data-act="pickRand">Agregar ' + 'al azar de las ' + l.length + ' filtradas</button></div></div>';
+}
+function agregaDelBanco(items) {
+  if (!items.length) return toast('No hay preguntas para agregar', true);
+  items.forEach(function (b) { var q = copia(b.pregunta); q.id = idq(); q.bancoId = b.id; ST.edit.preguntas.push(q); });
+  ST.modal = ''; ST.pick = null; toast(items.length + ' pregunta(s) agregadas desde el banco'); render();
+}
 
 /* ----- detalle de un intento ----- */
 function respTxt(q, it, resp) {
@@ -555,7 +757,7 @@ function corrTxt(q) {
   return q.rubrica ? rich(q.rubrica) : '<i class="mu">(sin criterio)</i>';
 }
 function modalIntento(it) {
-  var ex = ST.res.examen, h = '<div class="row sp"><h3 style="margin:0">' + esc(it.nombre) + '</h3><button data-act="cerrarModal">Cerrar</button></div><div class="mu">C.C. ' + esc(it.cedula) + ' · Nota <b>' + it.nota.toFixed(1) + '</b> (' + it.puntaje + '/' + it.total + ') · Salidas del examen: ' + it.salidas + ' · Enviado: ' + fechaTxt(it.fin) + '</div>';
+  var ex = ST.res.examen, h = '<div class="row sp"><h3 style="margin:0">' + esc(it.nombre) + '</h3><button data-act="cerrarModal">Cerrar</button></div><div class="mu">Código ' + esc(it.codigo) + ' · Nota <b>' + it.nota.toFixed(1) + '</b> (' + it.puntaje + '/' + it.total + ') · Salidas del examen: ' + it.salidas + ' · Enviado: ' + fechaTxt(it.fin) + '</div>';
   ex.preguntas.forEach(function (q, i) {
     var p = it.puntajes[q.id] || { got: 0, max: q.puntos }, col = p.got >= p.max ? 'c-ok' : p.got > 0 ? 'c-wa' : 'c-er';
     h += '<div class="qcard"><div class="row sp"><b>' + (i + 1) + '. </b><span class="chip ' + col + '">' + p.got + ' / ' + p.max + '</span></div><div>' + rich(q.enunciado) + '</div><div style="margin-top:6px"><span class="mu">Respuesta del estudiante:</span><div class="pv">' + respTxt(q, it, it.respuestas[q.id]) + '</div></div>';
@@ -568,20 +770,20 @@ function modalIntento(it) {
 
 /* ----- Excel ----- */
 function exportaExcel() {
-  var r = ST.res, ex = r.examen, filas = [['Cédula', 'Nombre', 'Curso', 'Estado', 'Puntaje', 'Total', 'Nota (0-5)', 'Salidas del examen', 'Por calificar']], det = [['Cédula', 'Nombre'].concat(ex.preguntas.map(function (q, i) { return 'P' + (i + 1) + ' (' + q.puntos + ')'; }))], pres = {};
+  var r = ST.res, ex = r.examen, filas = [['Código', 'Nombre', 'Curso', 'Estado', 'Puntaje', 'Total', 'Nota (0-5)', 'Salidas del examen', 'Por calificar']], det = [['Código', 'Nombre'].concat(ex.preguntas.map(function (q, i) { return 'P' + (i + 1) + ' (' + q.puntos + ')'; }))], pres = {};
   r.intentos.slice().sort(function (a, b) { return a.nombre.localeCompare(b.nombre); }).forEach(function (i) {
-    pres[cedKey(i.cedula)] = 1;
-    filas.push([i.cedula, i.nombre, i.curso, i.estado === 'enviado' ? 'Enviado' : 'En curso', i.puntaje, i.total, i.nota, i.salidas, i.pendientes ? 'Sí' : 'No']);
-    det.push([i.cedula, i.nombre].concat(ex.preguntas.map(function (q) { return (i.puntajes[q.id] || {}).got || 0; })));
+    pres[codN(i.codigo)] = 1;
+    filas.push([i.codigo, i.nombre, i.curso, i.estado === 'enviado' ? 'Enviado' : 'En curso', i.puntaje, i.total, i.nota, i.salidas, i.pendientes ? 'Sí' : 'No']);
+    det.push([i.codigo, i.nombre].concat(ex.preguntas.map(function (q) { return (i.puntajes[q.id] || {}).got || 0; })));
   });
-  r.estudiantes.filter(function (s) { return !pres[cedKey(s.cedula)]; }).forEach(function (s) { filas.push([s.cedula, s.nombre, s.curso, 'No presentó', '', '', '', '', '']); });
+  r.estudiantes.filter(function (s) { return !pres[codN(s.codigo)]; }).forEach(function (s) { filas.push([s.codigo, s.nombre, s.curso, 'No presentó', '', '', '', '', '']); });
   var env = r.intentos.filter(function (i) { return i.estado === 'enviado'; });
   var pq = [['#', 'Pregunta', 'Tipo', 'Puntos', '% de acierto', 'Estudiantes']].concat(ex.preguntas.map(function (q, k) { var s = 0, m = 0; env.forEach(function (i) { var p = i.puntajes[q.id]; if (p) { s += p.got; m += p.max; } }); return [k + 1, plain(q.enunciado).slice(0, 120), NOMT[q.tipo], q.puntos, m ? Math.round(s / m * 1000) / 10 : '', env.length]; }));
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filas), 'Notas');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(det), 'Detalle por pregunta');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pq), 'Análisis de preguntas');
-  XLSX.writeFile(wb, ('Resultados_' + ex.titulo).replace(/[^\w\-À-ſ]+/g, '_') + '.xlsx');
+  XLSX.writeFile(wb, ((r.curso ? r.curso.nombre + '_' : '') + ex.titulo).replace(/[^\w\-À-ſ]+/g, '_') + '.xlsx');
 }
 function leerEstudiantes(file) {
   return new Promise(function (res, rej) {
@@ -591,11 +793,11 @@ function leerEstudiantes(file) {
       try {
         var wb = XLSX.read(fr.result, { type: 'array' }), rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
         var norm = function (s) { return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); };
-        var head = (rows[0] || []).map(norm), ic = -1, inn = [], icu = -1, imail = -1, tieneHead = head.some(function (h) { return /ced|docum|ident|nombre|apellid|curso|grupo|correo|mail/.test(h); });
-        if (tieneHead) { head.forEach(function (h, k) { if (ic < 0 && /ced|docum|ident|^id$|^cc$/.test(h)) ic = k; else if (/nombre|apellid|estudiante|alumno/.test(h)) inn.push(k); else if (icu < 0 && /curso|grupo|materia|asignatura/.test(h)) icu = k; else if (imail < 0 && /correo|mail/.test(h)) imail = k; }); rows = rows.slice(1); }
-        else { ic = 0; inn = [1]; icu = 2; imail = 3; }
-        if (ic < 0 || !inn.length) throw new Error('No encontré las columnas de cédula y nombre');
-        res(rows.map(function (r) { return { cedula: String(r[ic] || '').trim(), nombre: inn.map(function (k) { return String(r[k] || '').trim(); }).filter(Boolean).join(' '), curso: icu >= 0 ? String(r[icu] || '').trim() : '', correo: imail >= 0 ? String(r[imail] || '').trim() : '' }; }).filter(function (r) { return r.cedula && r.nombre; }));
+        var head = (rows[0] || []).map(norm), ic = -1, inn = [], imail = -1, tieneHead = head.some(function (h) { return /cod|ced|docum|ident|nombre|apellid|correo|mail/.test(h); });
+        if (tieneHead) { head.forEach(function (h, k) { if (ic < 0 && /cod|ced|docum|ident|^id$|^cc$/.test(h)) ic = k; else if (/nombre|apellid|estudiante|alumno/.test(h)) inn.push(k); else if (imail < 0 && /correo|mail/.test(h)) imail = k; }); rows = rows.slice(1); }
+        else { ic = 0; inn = [1]; imail = 2; }
+        if (ic < 0 || !inn.length) throw new Error('No encontré las columnas de código y nombre');
+        res(rows.map(function (r) { return { codigo: String(r[ic] || '').trim(), nombre: inn.map(function (k) { return String(r[k] || '').trim(); }).filter(Boolean).join(' '), correo: imail >= 0 ? String(r[imail] || '').trim() : '' }; }).filter(function (r) { return r.codigo && r.nombre; }));
       } catch (e) { rej(e); }
     };
     fr.readAsArrayBuffer(file);
@@ -605,48 +807,65 @@ function leerEstudiantes(file) {
 /* ===================== ACCIONES ===================== */
 async function cargaDatos() { var r = await llamar('adm_datos'); if (r.ok) ST.datos = r; render(); return r; }
 var ACT = {
-  async loginEst() { var c = $('ced').value.trim(); if (!c) return toast('Escribe tu cédula', true); var r = await llamar('login', { cedula: c }); if (r.ok) { ST.est = r.estudiante; ST.lista = r.examenes; ST.vista = 'lista'; render(); } },
-  async loginDoc() { ST.clave = $('clave').value; if (DEMO && !ST.clave) ST.clave = 'demo'; var r = await llamar('adm_login'); if (!r.ok) { ST.clave = ''; return; } ST.vista = 'adm'; ST.datos = null; render(); cargaDatos(); },
-  salir() { if (ST.ex && !confirm('Si sales ahora tu examen seguirá corriendo. ¿Salir?')) return; clearInterval(ST.ex && ST.ex.t1); ST.ex = null; ST.vista = 'home'; ST.clave = ''; ST.est = null; ST.datos = null; ST.edit = null; ST.res = null; render(); },
+  async lgContinuar() { var c = $('cod').value.trim(); if (!c) return toast('Escribe tu código estudiantil', true); var r = await llamar('estado', { codigo: c }); if (r.ok) { ST.lg = { paso: r.tienePass ? 'clave' : 'crear', codigo: c }; render(); var f = $(r.tienePass ? 'pw' : 'pw1'); if (f) f.focus(); } },
+  lgAtras() { ST.lg = { paso: 'codigo', codigo: '' }; render(); },
+  async lgEntrar() { var r = await llamar('login', { codigo: ST.lg.codigo, clave: $('pw').value }); if (r.ok) entra(r); else if (r.crear) { ST.lg.paso = 'crear'; render(); } },
+  async lgCrear() { var a = $('pw1').value, b = $('pw2').value; if (a.length < MIN_CLAVE) return toast('La contraseña debe tener al menos ' + MIN_CLAVE + ' caracteres', true); if (a !== b) return toast('Las contraseñas no coinciden', true); var r = await llamar('registrar', { codigo: ST.lg.codigo, clave: a }); if (r.ok) entra(r); },
+  modalClave() { ST.modal = '<h3>Cambiar contraseña</h3><label class="f">Contraseña actual</label><input type="password" id="pa" autocomplete="current-password"><label class="f">Nueva contraseña</label><input type="password" id="pn" autocomplete="new-password"><label class="f">Repite la nueva</label><input type="password" id="pn2" autocomplete="new-password"><div class="row" style="margin-top:12px"><button class="pr" data-act="guardaClave">Guardar</button><button data-act="cerrarModal">Cancelar</button></div>'; render(); },
+  async guardaClave() { var n = $('pn').value; if (n !== $('pn2').value) return toast('Las contraseñas no coinciden', true); var r = await llamar('cambiarClave', { actual: $('pa').value, nueva: n }); if (r.ok) { toast('Contraseña actualizada'); entra(r); } },
+  async loginDoc() { ST.clave = $('clave').value; if (DEMO && !ST.clave) ST.clave = 'demo'; var r = await llamar('adm_login'); if (!r.ok) { ST.clave = ''; return; } ST.vista = 'adm'; ST.datos = null; ST.cursoId = ''; ST.atab = 'cursos'; render(); cargaDatos(); },
+  salir() { if (ST.ex && !confirm('Si sales ahora tu examen seguirá corriendo. ¿Salir?')) return; cierraSesion(); },
   verIntro(t) { ST.introId = t.dataset.id; ST.vista = 'intro'; render(); },
   verLista() { ST.vista = 'lista'; render(); },
   async verLista2() { await cargarLista(); ST.vista = 'lista'; render(); },
   async comenzar(t) {
-    var r = await llamar('iniciar', { cedula: ST.est.cedula, examenId: t.dataset.id }); if (!r.ok) { await cargarLista(); ST.vista = 'lista'; render(); return; }
+    var r = await llamar('iniciar', { examenId: t.dataset.id }); if (!r.ok) { if (ST.est) { await cargarLista(); ST.vista = 'lista'; render(); } return; }
     var loc = null; try { loc = JSON.parse(localStorage.getItem('pe_r_' + r.intento.id) || 'null'); } catch (e) { }
     var resp = Object.assign({}, r.intento.respuestas || {}, loc ? loc.r : {});
     ST.ex = { examen: r.examen, intento: r.intento, resp: resp, cur: 0, salidas: Math.max(r.intento.salidas || 0, loc ? loc.s || 0 : 0), aviso: '', sucio: false };
     ST.ex.orden = ordenPreguntas(); ST.vista = 'exam';
     try { await document.documentElement.requestFullscreen(); } catch (e) { }
     render(); ST.ex.t1 = setInterval(actualizaTimer, 500);
-    ST.ex.t2 = setInterval(async function () { var ex = ST.ex; if (!ex || !ex.sucio || ex.enviando) return; ex.sucio = false; var g = await api('guardar', { cedula: ST.est.cedula, intentoId: ex.intento.id, respuestas: ex.resp, salidas: ex.salidas }); if (!g.ok) ex.sucio = true; }, 20000);
+    ST.ex.t2 = setInterval(async function () { var ex = ST.ex; if (!ex || !ex.sucio || ex.enviando) return; ex.sucio = false; var g = await api('guardar', { intentoId: ex.intento.id, respuestas: ex.resp, salidas: ex.salidas }); if (!g.ok) ex.sucio = true; }, 20000);
   },
   irQ(t) { var i = Number(t.dataset.i); if (i < 0 || i >= ST.ex.orden.length) return; ST.ex.cur = i; render(); window.scrollTo(0, 0); },
   resp(t) { var q = ST.ex.examen.preguntas[ST.ex.orden[ST.ex.cur]], v = t.dataset.v; ST.ex.resp[q.id] = q.tipo === 'vf' ? v === 'true' : Number(v); guardaLocal(); render(); },
   pedirEnvio() { var ex = ST.ex, sin = ex.examen.preguntas.filter(function (q) { return !respondida(q); }).length; ST.modal = '<h3>¿Enviar el examen?</h3><p>' + (sin ? 'Te faltan <b>' + sin + '</b> pregunta(s) por responder.' : 'Respondiste todas las preguntas.') + ' Después de enviar no podrás cambiar nada.</p><div class="row"><button class="pr" data-act="confirmaEnvio">Sí, enviar</button><button data-act="cerrarModal">Seguir respondiendo</button></div>'; render(); },
   confirmaEnvio() { ST.modal = ''; render(); enviar(false); },
-  cerrarModal() { ST.modal = ''; render(); },
-  tab(t) { ST.tab = t.dataset.t; ST.edit = null; render(); },
-  nuevoEx() { ST.edit = exNuevo(); render(); window.scrollTo(0, 0); },
+  cerrarModal() { ST.modal = ''; ST.pick = null; render(); },
+  tab(t) { ST.atab = t.dataset.t; ST.edit = null; render(); },
+  ctab(t) { ST.ctab = t.dataset.t; ST.edit = null; render(); },
+  volverCursos() { ST.cursoId = ''; ST.atab = 'cursos'; ST.res = null; ST.edit = null; ST.bancoCurso = ''; render(); },
+  abrirCurso(t) { ST.cursoId = t.dataset.id; ST.ctab = 'sesiones'; ST.res = null; ST.bancoCurso = ''; ST.bf = { q: '', t: '', e: '' }; ST.filtroEst = ''; render(); window.scrollTo(0, 0); },
+  nuevoCurso() { ST.modal = '<h3>Nuevo curso</h3><label class="f">Nombre del curso</label><input type="text" id="cn" placeholder="Ej. Cálculo Integral - Biología"><label class="f">Descripción (opcional)</label><input type="text" id="cd"><div class="row" style="margin-top:12px"><button class="pr" data-act="guardaCurso" data-id="">Crear curso</button><button data-act="cerrarModal">Cancelar</button></div>'; render(); },
+  editCurso(t) { var c = ST.datos.cursos.filter(function (x) { return x.id === t.dataset.id; })[0]; ST.modal = '<h3>Editar curso</h3><label class="f">Nombre del curso</label><input type="text" id="cn" value="' + esc(c.nombre) + '"><label class="f">Descripción (opcional)</label><input type="text" id="cd" value="' + esc(c.descripcion) + '"><div class="row" style="margin-top:12px"><button class="pr" data-act="guardaCurso" data-id="' + esc(c.id) + '">Guardar</button><button data-act="cerrarModal">Cancelar</button></div>'; render(); },
+  async guardaCurso(t) { var r = await llamar('adm_guardarCurso', { curso: { id: t.dataset.id, nombre: $('cn').value, descripcion: $('cd').value } }); if (r.ok) { ST.modal = ''; toast('Curso guardado'); await cargaDatos(); } },
+  async delCurso(t) { var c = ST.datos.cursos.filter(function (x) { return x.id === t.dataset.id; })[0]; if (!confirm('¿Eliminar el curso "' + c.nombre + '" con TODO lo que contiene (estudiantes, sesiones, resultados y banco de preguntas)? No se puede deshacer.')) return; var r = await llamar('adm_eliminarCurso', { id: c.id }); if (r.ok) { toast('Curso eliminado'); cargaDatos(); } },
+  nuevoEx() { ST.edit = exNuevo(ST.cursoId); render(); window.scrollTo(0, 0); },
   editEx(t) { ST.edit = copia(ST.datos.examenes.filter(function (e) { return e.id === t.dataset.id; })[0]); render(); window.scrollTo(0, 0); },
-  async dupEx(t) { var e = copia(ST.datos.examenes.filter(function (x) { return x.id === t.dataset.id; })[0]); e.id = ''; e.titulo += ' (copia)'; e.estado = 'borrador'; e.preguntas.forEach(function (q) { q.id = idq(); }); var r = await llamar('adm_guardarExamen', { examen: e }); if (r.ok) { toast('Examen duplicado'); cargaDatos(); } },
-  async togEx(t) { var e = ST.datos.examenes.filter(function (x) { return x.id === t.dataset.id; })[0]; var r = await llamar('adm_estadoExamen', { id: e.id, estado: e.estado === 'publicado' ? 'borrador' : 'publicado' }); if (r.ok) { toast(e.estado === 'publicado' ? 'Pasado a borrador' : 'Examen publicado'); cargaDatos(); } },
-  async delEx(t) { if (!confirm('¿Eliminar este examen y TODOS sus resultados? No se puede deshacer.')) return; var r = await llamar('adm_eliminarExamen', { id: t.dataset.id }); if (r.ok) { toast('Examen eliminado'); cargaDatos(); } },
-  async resEx(t) { ST.tab = 'res'; await cargaResultados(t.dataset.id); },
-  async cargaRes() { var id = $('selRes') ? $('selRes').value : (ST.res && ST.res.examen.id); if (!id) return toast('Elige un examen', true); await cargaResultados(id); },
+  async dupEx(t) { var e = copia(ST.datos.examenes.filter(function (x) { return x.id === t.dataset.id; })[0]); e.id = ''; e.titulo += ' (copia)'; e.estado = 'borrador'; e.preguntas.forEach(function (q) { q.id = idq(); }); var r = await llamar('adm_guardarExamen', { examen: e }); if (r.ok) { toast('Sesión duplicada'); cargaDatos(); } },
+  async togEx(t) { var e = ST.datos.examenes.filter(function (x) { return x.id === t.dataset.id; })[0]; var r = await llamar('adm_estadoExamen', { id: e.id, estado: e.estado === 'publicado' ? 'borrador' : 'publicado' }); if (r.ok) { toast(e.estado === 'publicado' ? 'Pasado a borrador' : 'Sesión publicada'); cargaDatos(); } },
+  async delEx(t) { if (!confirm('¿Eliminar esta sesión y TODOS sus resultados? No se puede deshacer.')) return; var r = await llamar('adm_eliminarExamen', { id: t.dataset.id }); if (r.ok) { toast('Sesión eliminada'); cargaDatos(); } },
+  async resEx(t) { ST.ctab = 'res'; await cargaResultados(t.dataset.id); },
+  async cargaRes() { var id = $('selRes') ? $('selRes').value : (ST.res && ST.res.examen.id); if (!id) return toast('Elige una sesión', true); await cargaResultados(id); },
   detInt(t) { var it = ST.res.intentos.filter(function (i) { return i.id === t.dataset.id; })[0]; if (it.estado !== 'enviado') return toast('Ese estudiante aún está presentando'); ST.modal = modalIntento(it); render(); },
   async califMan(t) { var v = $('man-' + t.dataset.i).value; if (v === '') return toast('Escribe los puntos', true); var r = await llamar('adm_calificar', { intentoId: t.dataset.id, qid: t.dataset.q, puntos: Number(v) }); if (r.ok) { var rr = await api('adm_resultados', { examenId: ST.res.examen.id }); if (rr.ok) ST.res = rr; var it = ST.res.intentos.filter(function (i) { return i.id === t.dataset.id; })[0]; ST.modal = modalIntento(it); toast('Calificación guardada'); render(); } },
   async delInt(t) { if (!confirm('¿Eliminar este intento? El estudiante podrá presentar de nuevo.')) return; var r = await llamar('adm_eliminarIntento', { intentoId: t.dataset.id }); if (r.ok) { ST.modal = ''; await cargaResultados(ST.res.examen.id); } },
   async recalc() { var r = await llamar('adm_recalcular', { examenId: ST.res.examen.id }); if (r.ok) { toast('Notas recalculadas (' + r.n + ')'); await cargaResultados(ST.res.examen.id); } },
   excel() { exportaExcel(); },
-  fechas(t) { var e = ST.datos.examenes.filter(function (x) { return x.id === t.dataset.id; })[0]; ST.modal = '<h3>Programar: ' + esc(e.titulo) + '</h3><label class="f">Apertura</label><input type="datetime-local" id="fi" value="' + aLocalInput(e.inicio) + '"><label class="f">Cierre</label><input type="datetime-local" id="ff" value="' + aLocalInput(e.fin) + '"><label class="f">Duración (min)</label><input type="number" id="fd" min="0" value="' + e.duracion + '"><label style="display:block;margin-top:10px"><input type="checkbox" id="fp"' + (e.estado === 'publicado' ? ' checked' : '') + '> Publicado</label><div class="row" style="margin-top:12px"><button class="pr" data-act="guardaFechas" data-id="' + esc(e.id) + '">Guardar</button><button data-act="cerrarModal">Cancelar</button></div>'; render(); },
+  fechas(t) { var e = ST.datos.examenes.filter(function (x) { return x.id === t.dataset.id; })[0]; ST.modal = '<h3>Programar: ' + esc(e.titulo) + '</h3><div class="mu">Curso: ' + esc(nomCurso(e.cursoId)) + '</div><label class="f">Apertura</label><input type="datetime-local" id="fi" value="' + aLocalInput(e.inicio) + '"><label class="f">Cierre</label><input type="datetime-local" id="ff" value="' + aLocalInput(e.fin) + '"><label class="f">Duración (min)</label><input type="number" id="fd" min="0" value="' + e.duracion + '"><label style="display:block;margin-top:10px"><input type="checkbox" id="fp"' + (e.estado === 'publicado' ? ' checked' : '') + '> Publicado</label><div class="row" style="margin-top:12px"><button class="pr" data-act="guardaFechas" data-id="' + esc(e.id) + '">Guardar</button><button data-act="cerrarModal">Cancelar</button></div>'; render(); },
   async guardaFechas(t) { var r = await llamar('adm_estadoExamen', { id: t.dataset.id, inicio: delLocalInput($('fi').value), fin: delLocalInput($('ff').value), duracion: Number($('fd').value) || 0, estado: $('fp').checked ? 'publicado' : 'borrador' }); if (r.ok) { ST.modal = ''; toast('Programación guardada'); cargaDatos(); } },
-  plantilla() { var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['cedula', 'nombre', 'curso', 'correo'], ['1045000001', 'Perez Gomez Ana', 'Calculo Integral', 'ana@correo.com']]), 'Estudiantes'); XLSX.writeFile(wb, 'plantilla_estudiantes.xlsx'); },
-  async addEst() { var c = $('nc').value.trim(), n = $('nn').value.trim(); if (!c || !n) return toast('Falta cédula o nombre', true); var r = await llamar('adm_estudiantes', { modo: 'agregar', lista: [{ cedula: c, nombre: n, curso: $('ncu').value.trim(), correo: '' }] }); if (r.ok) { toast('Estudiante agregado'); cargaDatos(); } },
-  async delEst(t) { if (!confirm('¿Quitar a este estudiante de la lista?')) return; var r = await llamar('adm_eliminarEstudiante', { cedula: t.dataset.c }); if (r.ok) cargaDatos(); },
-  async subeEst(t) { var m = t.dataset.m, r = await llamar('adm_estudiantes', { modo: m, lista: ST.cargaEst }); if (r.ok) { toast('Lista guardada: ' + r.total + ' estudiantes'); ST.cargaEst = null; cargaDatos(); } },
+  plantilla() { var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['codigo', 'nombre', 'correo'], ['2024010001', 'Perez Gomez Ana', 'ana@correo.com']]), 'Estudiantes'); XLSX.writeFile(wb, 'plantilla_estudiantes.xlsx'); },
+  async addEst() { var c = $('nc').value.trim(), n = $('nn').value.trim(); if (!c || !n) return toast('Falta el código o el nombre', true); var r = await llamar('adm_estudiantes', { cursoId: ST.cursoId, modo: 'agregar', lista: [{ codigo: c, nombre: n, correo: '' }] }); if (r.ok) { toast('Estudiante agregado'); cargaDatos(); } },
+  async delEst(t) { if (!confirm('¿Quitar a este estudiante de la lista?')) return; var r = await llamar('adm_eliminarEstudiante', { codigo: t.dataset.c }); if (r.ok) cargaDatos(); },
+  async resetEst(t) { if (!confirm('¿Restablecer la contraseña de este estudiante? Tendrá que crear una nueva al ingresar.')) return; var r = await llamar('adm_resetClave', { codigo: t.dataset.c }); if (r.ok) { toast('Contraseña restablecida'); cargaDatos(); } },
+  async subeEst(t) { var m = t.dataset.m, r = await llamar('adm_estudiantes', { cursoId: ST.cursoId, modo: m, lista: ST.cargaEst }); if (r.ok) { toast('Lista guardada: ' + r.total + ' estudiantes' + (r.movidos ? ' (' + r.movidos + ' venían de otro curso)' : '')); ST.cargaEst = null; cargaDatos(); } },
   cancelEd() { ST.edit = null; render(); },
-  async guardaEd() { var E = copia(ST.edit); var r = await llamar('adm_guardarExamen', { examen: E }); if (r.ok) { toast('Examen guardado'); ST.edit = null; cargaDatos(); } },
+  async guardaEd() {
+    var E = copia(ST.edit), r;
+    if (E.kind === 'banco') { r = await llamar('adm_guardarPreguntas', { cursoId: E.cursoId, items: [{ id: E.id, etiqueta: E.etiqueta || '', pregunta: E.preguntas[0] }] }); if (r.ok) { toast('Pregunta guardada en el banco'); ST.edit = null; ST.bancoCurso = ''; cargaDatos(); } return; }
+    r = await llamar('adm_guardarExamen', { examen: E }); if (r.ok) { toast('Sesión guardada'); ST.edit = null; cargaDatos(); }
+  },
   addQ(t) { ST.edit.preguntas.push(qNueva(t.dataset.t)); render(); },
   delQ(t) { if (confirm('¿Eliminar esta pregunta?')) { ST.edit.preguntas.splice(Number(t.dataset.i), 1); render(); } },
   dupQ(t) { var i = Number(t.dataset.i), q = copia(ST.edit.preguntas[i]); q.id = idq(); ST.edit.preguntas.splice(i + 1, 0, q); render(); },
@@ -654,9 +873,16 @@ var ACT = {
   addOp(t) { var q = ST.edit.preguntas[Number(t.dataset.i)]; if (q.opciones.length < 8) { q.opciones.push(''); render(); } },
   delOp(t) { var q = ST.edit.preguntas[Number(t.dataset.i)], k = Number(t.dataset.k); if (q.opciones.length <= 2) return toast('Mínimo 2 opciones', true); q.opciones.splice(k, 1); if (Number(q.correcta) >= q.opciones.length || Number(q.correcta) === k) q.correcta = 0; render(); },
   addPar(t) { ST.edit.preguntas[Number(t.dataset.i)].pares.push(['', '']); render(); },
-  delPar(t) { var q = ST.edit.preguntas[Number(t.dataset.i)]; if (q.pares.length <= 2) return toast('Mínimo 2 parejas', true); q.pares.splice(Number(t.dataset.k), 1); render(); }
+  delPar(t) { var q = ST.edit.preguntas[Number(t.dataset.i)]; if (q.pares.length <= 2) return toast('Mínimo 2 parejas', true); q.pares.splice(Number(t.dataset.k), 1); render(); },
+  nuevaPB(t) { ST.edit = { kind: 'banco', id: '', cursoId: ST.cursoId, etiqueta: '', preguntas: [qNueva(t.dataset.t)] }; render(); window.scrollTo(0, 0); },
+  editPB(t) { var b = ST.banco.filter(function (x) { return x.id === t.dataset.id; })[0]; ST.edit = { kind: 'banco', id: b.id, cursoId: b.cursoId, etiqueta: b.etiqueta, preguntas: [copia(b.pregunta)] }; render(); window.scrollTo(0, 0); },
+  async delPB(t) { if (!confirm('¿Eliminar esta pregunta del banco? (Las sesiones que ya la usan conservan su copia.)')) return; var r = await llamar('adm_eliminarPreguntas', { ids: [t.dataset.id] }); if (r.ok) { toast('Pregunta eliminada'); ST.bancoCurso = ''; await cargaDatos(); } },
+  async alBanco(t) { var q = ST.edit.preguntas[Number(t.dataset.i)], et = prompt('Tema o etiqueta para el banco (opcional):', ''); if (et === null) return; var r = await llamar('adm_guardarPreguntas', { cursoId: ST.edit.cursoId, items: [{ etiqueta: et, pregunta: copia(q) }] }); if (r.ok) { toast('Guardada en el banco del curso'); ST.bancoCurso = ''; ST.datos.bancoN[ST.edit.cursoId] = (ST.datos.bancoN[ST.edit.cursoId] || 0) + 1; } },
+  async abrePick() { if (ST.bancoCurso !== ST.edit.cursoId) await cargaBanco(ST.edit.cursoId); if (!ST.banco.length) return toast('El banco de este curso está vacío todavía', true); ST.pick = { sel: {}, q: '', t: '', e: '', n: 5 }; ST.modal = modalPick(); render(); },
+  pickAdd() { var ids = Object.keys(ST.pick.sel).filter(function (k) { return ST.pick.sel[k]; }); agregaDelBanco(ST.banco.filter(function (b) { return ids.indexOf(b.id) >= 0; })); },
+  pickRand() { var l = pickLista().slice(), i, j, t; for (i = l.length - 1; i > 0; i--) { j = Math.floor(Math.random() * (i + 1)); t = l[i]; l[i] = l[j]; l[j] = t; } agregaDelBanco(l.slice(0, Math.max(1, Number(ST.pick.n) || 1))); }
 };
-async function cargaResultados(id) { var r = await llamar('adm_resultados', { examenId: id }); if (r.ok) { ST.res = r; ST.tab = 'res'; render(); } }
+async function cargaResultados(id) { var r = await llamar('adm_resultados', { examenId: id }); if (r.ok) { ST.res = r; ST.ctab = 'res'; render(); } }
 
 /* ===================== EVENTOS ===================== */
 document.addEventListener('click', function (e) { var t = e.target.closest('[data-act]'); if (!t || t.disabled) return; var f = ACT[t.dataset.act]; if (f) f(t, e); });
@@ -667,7 +893,9 @@ document.addEventListener('input', function (e) {
     if (t.dataset.inp === 'emp') { var a = Array.isArray(ex.resp[q.id]) ? ex.resp[q.id].slice() : q.izq.map(function () { return ''; }); a[Number(t.dataset.i)] = t.value === '' ? '' : Number(t.value); ex.resp[q.id] = a; } else ex.resp[q.id] = t.value;
     guardaLocal(); var nb = document.querySelector('.nav button.cur'); if (nb) nb.classList.toggle('ans', respondida(q)); return;
   }
-  if (t.id === 'bEst') { ST.filtroEst = t.value; var p = t.selectionStart; render(); var b = $('bEst'); if (b) { b.focus(); b.setSelectionRange(p, p); } return; }
+  if (t.id === 'bEst') { ST.filtroEst = t.value; rerender(); return; }
+  if (t.dataset.bf) { ST.bf[t.dataset.bf] = t.value; rerender(); return; }
+  if (t.dataset.pk && ST.pick) { if (t.dataset.pk === 'n') { ST.pick.n = Number(t.value) || 1; return; } ST.pick[t.dataset.pk] = t.value; ST.modal = modalPick(); rerender(); return; }
   if (t.dataset.m && ST.edit) {
     var m = t.dataset.m.split(':'), E = ST.edit, v = t.type === 'checkbox' ? t.checked : t.value;
     if (m[0] === 'f') { if (m[1] === 'publicado') E.estado = v ? 'publicado' : 'borrador'; else if (t.type === 'datetime-local') E[m[1]] = delLocalInput(v); else if (t.type === 'number') E[m[1]] = Number(v) || 0; else E[m[1]] = v; }
@@ -680,7 +908,8 @@ document.addEventListener('input', function (e) {
 document.addEventListener('change', function (e) {
   var t = e.target;
   if (t.dataset.c && ST.edit) { var p = t.dataset.c.split(':'), q = ST.edit.preguntas[+p[0]]; q.correcta = p[1] === 'v' ? true : p[1] === 'f' ? false : Number(p[1]); }
-  if (t.id === 'fileEst' && t.files[0]) leerEstudiantes(t.files[0]).then(function (l) { ST.cargaEst = l; var cu = {}; l.forEach(function (s) { cu[s.curso || '(sin curso)'] = (cu[s.curso || '(sin curso)'] || 0) + 1; }); $('prevEst').innerHTML = '<div class="warn" style="background:#ecfdf5;color:#065f46;margin-top:10px">Se leyeron <b>' + l.length + '</b> estudiantes (' + Object.keys(cu).map(function (c) { return esc(c) + ': ' + cu[c]; }).join(', ') + ').<div class="row" style="margin-top:8px"><button class="pr" data-act="subeEst" data-m="agregar">Agregar a la lista actual</button><button class="dg" data-act="subeEst" data-m="reemplazar">Reemplazar toda la lista</button></div></div>'; }).catch(function (er) { toast(er.message, true); });
+  if (t.dataset.pick && ST.pick) { ST.pick.sel[t.dataset.pick] = t.checked; var n = Object.keys(ST.pick.sel).filter(function (k) { return ST.pick.sel[k]; }).length, b = document.querySelector('[data-act=pickAdd]'); if (b) { b.textContent = 'Agregar seleccionadas (' + n + ')'; b.disabled = !n; } }
+  if (t.id === 'fileEst' && t.files[0]) leerEstudiantes(t.files[0]).then(function (l) { ST.cargaEst = l; $('prevEst').innerHTML = '<div class="warn" style="background:#ecfdf5;color:#065f46;margin-top:10px">Se leyeron <b>' + l.length + '</b> estudiantes para el curso <b>' + esc(cursoActual().nombre) + '</b>.<div class="row" style="margin-top:8px"><button class="pr" data-act="subeEst" data-m="agregar">Agregar a la lista actual</button><button class="dg" data-act="subeEst" data-m="reemplazar">Reemplazar la lista de este curso</button></div></div>'; }).catch(function (er) { toast(er.message, true); });
   if (t.id === 'selRes' && t.value) cargaResultados(t.value);
 });
 document.addEventListener('visibilitychange', function () { if (document.hidden) registraSalida('cambio de pestaña'); });
@@ -689,10 +918,16 @@ document.addEventListener('fullscreenchange', function () { if (ST.vista === 'ex
 ACT.volverFS = async function () { ST.modal = ''; render(); try { await document.documentElement.requestFullscreen(); } catch (e) { } };
 ['copy', 'cut', 'paste', 'contextmenu'].forEach(function (ev) { document.addEventListener(ev, function (e) { if (ST.vista === 'exam' && !/INPUT|TEXTAREA/.test(e.target.tagName)) e.preventDefault(); }); });
 window.addEventListener('beforeunload', function (e) { if (ST.vista === 'exam') { e.preventDefault(); e.returnValue = ''; } });
-document.addEventListener('keydown', function (e) { if (e.key === 'Enter' && ST.vista === 'home') { if (e.target.id === 'ced') ACT.loginEst(); if (e.target.id === 'clave') ACT.loginDoc(); } });
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter' || ST.vista !== 'home') return;
+  var id = e.target.id; if (id === 'cod') ACT.lgContinuar(); else if (id === 'pw') ACT.lgEntrar(); else if (id === 'pw1' || id === 'pw2') ACT.lgCrear(); else if (id === 'clave') ACT.loginDoc();
+});
 if (DEMO) sembrarDemo();
 render();
 window.addEventListener('load', function () { if (ST.vista === 'home') render(); });
+(async function () {
+  try { var s = JSON.parse(sessionStorage.getItem('pe_sess') || 'null'); if (!s || !s.c) return; ST.est = { codigo: s.c }; ST.token = s.t; var r = await api('lista'); if (r.ok) entra(r, false); else { ST.est = null; ST.token = ''; sessionStorage.removeItem('pe_sess'); } } catch (e) { }
+})();
 </script>
 </body>
 </html>
