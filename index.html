@@ -303,7 +303,7 @@ function sesion(db, est, now) {
     var mis = ints.filter(function (i) { return i.examenId === e.id; }), enCurso = mis.filter(function (i) { return i.estado === 'en curso' && i.deadline > now; })[0], ult = mis.filter(function (i) { return i.estado === 'enviado'; }).sort(function (x, y) { return y.fin - x.fin; })[0], v = ventana(e, now);
     return { id: e.id, titulo: e.titulo, descripcion: e.descripcion, duracion: e.duracion, inicio: e.inicio, fin: e.fin, ventana: v, intentos: e.intentos, usados: mis.length, enCurso: !!enCurso, puedeIniciar: !!enCurso || (v === 'abierto' && mis.length < e.intentos), ultimo: ult ? resumenInt(e, ult) : null, preguntas: e.preguntas.length };
   }).sort(function (x, y) { return (x.inicio || 0) - (y.inicio || 0); });
-  return { ok: true, now: now, token: tokenDe(est), estudiante: { codigo: est.codigo, nombre: est.nombre, curso: est.curso }, examenes: lista };
+  return { ok: true, now: now, token: tokenDe(est), estudiante: { codigo: est.codigo, nombre: est.nombre, curso: est.curso }, docente: perfilDoc(db), examenes: lista };
 }
 
 /* ----- estudiante: examen ----- */
@@ -521,7 +521,7 @@ async function llamar(action, data) {
 function paintBusy() { var b = $('busy'); if (ST.busy && !b) { b = document.createElement('div'); b.id = 'busy'; b.className = 'busy'; b.textContent = 'Cargando…'; document.body.appendChild(b); } else if (!ST.busy && b) b.remove(); }
 function cierraSesion() { try { sessionStorage.removeItem('pe_sess'); } catch (e) { } if (ST.ex) { clearInterval(ST.ex.t1); clearInterval(ST.ex.t2); } ST.ex = null; ST.est = null; ST.token = ''; ST.vista = 'home'; ST.clave = ''; ST.datos = null; ST.edit = null; ST.res = null; ST.cursoId = ''; ST.modal = ''; ST.lg = { paso: 'codigo', codigo: '' }; render(); }
 function entra(r, guarda) {
-  ST.est = r.estudiante; ST.token = r.token; ST.lista = r.examenes; ST.vista = 'lista'; ST.modal = '';
+  ST.est = r.estudiante; ST.token = r.token; ST.lista = r.examenes; ST.docente = r.docente || ST.docente; ST.vista = 'lista'; ST.modal = '';
   if (guarda !== false) try { sessionStorage.setItem('pe_sess', JSON.stringify({ c: r.estudiante.codigo, t: r.token })); } catch (e) { }
   render();
 }
@@ -549,8 +549,13 @@ function vHome() {
 }
 
 /* ===================== ESTUDIANTE ===================== */
+function docH() {
+  var p = ST.docente; if (!p || !p.nombre) return '';
+  var l = [p.cargo, p.institucion].filter(Boolean).join(' · ');
+  return '<div class="mu" style="margin-top:6px">Docente: <b>' + esc(p.nombre) + '</b>' + (l ? ' · ' + esc(l) : '') + (p.correo ? ' · <a href="mailto:' + esc(p.correo) + '">' + esc(p.correo) + '</a>' : '') + (p.telefono ? ' · ' + esc(p.telefono) : '') + '</div>';
+}
 function vLista() {
-  var e = ST.est, h = '<main><div class="card"><div class="row sp"><div><h2 style="margin:0 0 4px">Hola, ' + esc(e.nombre) + '</h2><div class="mu">' + esc(e.curso) + ' · Código ' + esc(e.codigo) + '</div></div><button class="sm" data-act="modalClave">Cambiar contraseña</button></div></div>';
+  var e = ST.est, h = '<main><div class="card"><div class="row sp"><div><h2 style="margin:0 0 4px">Hola, ' + esc(e.nombre) + '</h2><div class="mu">' + esc(e.curso) + ' · Código ' + esc(e.codigo) + '</div>' + docH() + '</div><button class="sm" data-act="modalClave">Cambiar contraseña</button></div></div>';
   if (!ST.lista.length) h += '<div class="card mu">No tienes exámenes publicados por ahora.</div>';
   ST.lista.forEach(function (x) {
     var chip = x.enCurso ? '<span class="chip c-in">En curso</span>' : x.ventana === 'proximo' ? '<span class="chip c-wa">Próximamente</span>' : x.ventana === 'cerrado' ? '<span class="chip c-er">Cerrado</span>' : '<span class="chip c-ok">Abierto</span>';
@@ -598,7 +603,7 @@ function vFin() {
   else h += '<p>Tus respuestas fueron registradas. El docente publicará los resultados.</p>';
   return h + '<button class="pr" data-act="verLista2">Volver a mis exámenes</button></div></main>';
 }
-async function cargarLista() { var r = await llamar('lista'); if (r.ok) { ST.est = r.estudiante; ST.token = r.token; ST.lista = r.examenes; } return r; }
+async function cargarLista() { var r = await llamar('lista'); if (r.ok) { ST.est = r.estudiante; ST.token = r.token; ST.lista = r.examenes; ST.docente = r.docente || ST.docente; } return r; }
 function guardaLocal() { var ex = ST.ex; try { localStorage.setItem('pe_r_' + ex.intento.id, JSON.stringify({ r: ex.resp, s: ex.salidas, c: ex.cur })); } catch (e) { } ex.sucio = true; }
 function actualizaTimer() {
   var ex = ST.ex; if (!ex || ST.vista !== 'exam') return; var t = $('timer'); if (!t) return;
